@@ -49,7 +49,9 @@ class AnalyseJobStore:
                 "preview_html": job.get("preview_html"),
                 "html": (job.get("result") or {}).get("html") if job.get("result") else None,
                 "summary": (job.get("result") or {}).get("summary") if job.get("result") else None,
-                "metadata": (job.get("result") or {}).get("metadata") if job.get("result") else None,
+                "metadata": (
+                    (job.get("result") or {}).get("metadata") if job.get("result") else None
+                ),
                 "error": job.get("error"),
             }
 

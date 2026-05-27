@@ -35,16 +35,59 @@
 ## Installation
 
 ```bash
-git clone https://github.com/<your-org>/ticker-tracker.git
-cd ticker-tracker
+git clone https://github.com/giridharlanka/ticker_tracker_UI.git
+cd ticker_tracker_UI
 python3.11 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install "."
-# optional: pytest, ruff, mypy (contributors)
+pip install -r requirements.txt
+# or install the package (registers ticker-tracker CLI):
+pip install .
+```
+
+**Contributors / CI parity:**
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+# equivalent:
 pip install -e ".[dev]"
 ```
 
-Use `pip install -e .` instead of `pip install .` if you want an editable checkout while iterating.
+Use `pip install -e .` if you want an editable checkout while iterating.
+
+### Optional environment file
+
+Copy `.env.example` to `.env` for local secrets (e.g. `GEMINI_API_KEY`). `.env` is gitignored. The dashboard loads it on startup when you run `python app.py`.
+
+### Where data lives (not in the repo)
+
+| Item | Typical location (macOS) |
+|------|---------------------------|
+| Encrypted settings | `~/Library/Application Support/ticker-tracker/config.enc` |
+| Google OAuth client | `~/Library/Application Support/ticker-tracker/credentials.json` |
+| API keys | macOS Keychain (see [SECURITY.md](SECURITY.md)) |
+
+---
+
+## Quick start (dashboard)
+
+After installation and [Google Cloud setup](#google-cloud-setup-step-by-step):
+
+```bash
+source .venv/bin/activate
+python main.py --setup          # first time: wizard + credentials.json
+python app.py                   # http://127.0.0.1:5225/
+```
+
+1. Open **Settings** — sheet ID, columns, email, analysis provider (Ollama or Gemini).  
+2. Place **`credentials.json`** in the app config directory (see table above).  
+3. Click **Analyse** on the Run panel.
+
+**Headless one-shot run:**
+
+```bash
+ticker-tracker --run
+ticker-tracker --run --no-analysis   # skip LLM / fundamentals
+```
 
 Run the **setup wizard** (stores encrypted `config.enc` and keychain entries):
 

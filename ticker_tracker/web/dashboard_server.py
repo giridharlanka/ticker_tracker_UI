@@ -14,11 +14,12 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from ticker_tracker.analysis.base import LLMAnalysis
 from ticker_tracker.config import AppConfig, EncryptedConfig, default_config_path, load_env_files
 from ticker_tracker.engine import run_once
-from ticker_tracker.html_report import TabbedReportState
 from ticker_tracker.google.auth import get_credentials
 from ticker_tracker.google.gmail import send_email
+from ticker_tracker.html_report import TabbedReportState
 from ticker_tracker.setup_core import (
     HOLDINGS_SOURCES,
     KNOWN_FINANCE_SOURCES,
@@ -29,7 +30,6 @@ from ticker_tracker.setup_core import (
     parse_emails_blob,
     parse_market_overrides_blob,
 )
-from ticker_tracker.analysis.base import LLMAnalysis
 from ticker_tracker.web.analyse_job import JOB_STORE
 from ticker_tracker.web.setup_server import (
     _default_form,
@@ -237,6 +237,7 @@ def _analyse_worker(
     upload_file = None
     if upload_bytes and upload_filename:
         from io import BytesIO
+
         from werkzeug.datastructures import FileStorage
 
         upload_file = FileStorage(
@@ -268,7 +269,7 @@ def _json_to_form(data: Mapping[str, Any]) -> dict[str, Any]:
     if not data:
         return out
     out["google_sheets_id"] = str(data.get("google_sheets_id") or "").strip()
-    out["holdings_sheet_name"] = (str(data.get("holdings_sheet_name") or "").strip() or "Holdings")
+    out["holdings_sheet_name"] = str(data.get("holdings_sheet_name") or "").strip() or "Holdings"
     hs = str(data.get("holdings_source") or "google_sheets").strip().lower()
     out["holdings_source"] = hs if hs in HOLDINGS_SOURCES else "google_sheets"
     out["local_holdings_path"] = str(data.get("local_holdings_path") or "").strip()
@@ -630,7 +631,9 @@ def create_dashboard_app(encrypted_config: EncryptedConfig) -> Flask:
             upload_file = request.files.get("file")
             output_dir_raw = str(request.form.get("output_dir") or "").strip() or None
             holdings_path_raw = str(request.form.get("holdings_path") or "").strip()
-            sheet_name_run = str(request.form.get("holdings_sheet_name") or "").strip() or "Holdings"
+            sheet_name_run = (
+                str(request.form.get("holdings_sheet_name") or "").strip() or "Holdings"
+            )
             if upload_file is not None and upload_file.filename:
                 upload_bytes = upload_file.read()
                 upload_filename = upload_file.filename

@@ -115,7 +115,9 @@ def _find_row(financials: pd.DataFrame, names: tuple[str, ...]) -> pd.Series | N
     return None
 
 
-def _yoy_from_financials(financials: pd.DataFrame | None, row_names: tuple[str, ...]) -> float | None:
+def _yoy_from_financials(
+    financials: pd.DataFrame | None, row_names: tuple[str, ...]
+) -> float | None:
     if financials is None or financials.empty or len(financials.columns) < 2:
         return None
     row = _find_row(financials, row_names)

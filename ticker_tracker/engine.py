@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from google.oauth2.credentials import Credentials
+from ticker_tracker.analysis.base import FundamentalsResult, LLMAnalysis, TechnicalResult
+from ticker_tracker.analysis.fundamentals import FundamentalsAdapter
+from ticker_tracker.analysis.llm_analyst import LLMAnalyst, is_llm_available, llm_offline_hint
+from ticker_tracker.analysis.technicals import TechnicalAnalyser
 from ticker_tracker.calculator import (
     cost_basis_base,
     current_value_base,
@@ -37,14 +41,9 @@ from ticker_tracker.fx.registry import FXRunRegistry
 from ticker_tracker.google.drive import upload_file
 from ticker_tracker.google.gmail import send_email
 from ticker_tracker.google.sheets import read_holdings
-from ticker_tracker.local_holdings import read_local_holdings
-from ticker_tracker.analysis.base import FundamentalsResult, LLMAnalysis, TechnicalResult
-from ticker_tracker.analysis.fundamentals import FundamentalsAdapter
-from ticker_tracker.analysis.llm_analyst import LLMAnalyst, is_llm_available, llm_offline_hint
-from ticker_tracker.analysis.technicals import TechnicalAnalyser
 from ticker_tracker.html_report import TabbedReportState, build_portfolio_tabbed_html
+from ticker_tracker.local_holdings import read_local_holdings
 from ticker_tracker.report_builder import (
-    build_portfolio_html_analysis_section,
     build_portfolio_workbook,
     default_workbook_filename,
 )
@@ -994,7 +993,9 @@ def run_once(
             analyses_by_ticker = {}
             llm_results: list[LLMAnalysis] = []
             llm_tickers = list(
-                dict.fromkeys(str(h.get("ticker") or "") for h in display_holdings if h.get("ticker"))
+                dict.fromkeys(
+                    str(h.get("ticker") or "") for h in display_holdings if h.get("ticker")
+                )
             )
             n_llm = len(llm_tickers) or 1
             holdings_by_ticker = {
@@ -1015,9 +1016,7 @@ def run_once(
                     "current_value_base": holding.get("current_value_base"),
                     "native_currency": holding.get("native_ccy"),
                 }
-                analysis = analyst.analyse_ticker(
-                    ticker, fund, tech, base, holding_dict
-                )
+                analysis = analyst.analyse_ticker(ticker, fund, tech, base, holding_dict)
                 analyses_by_ticker[ticker] = analysis
                 llm_results.append(analysis)
                 if report_state is not None:

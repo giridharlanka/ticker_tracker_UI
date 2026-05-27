@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from ticker_tracker.config import get_gemini_api_key, load_env_files
 
 
@@ -21,7 +20,9 @@ def _clear_gemini_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("ticker_tracker.config._ENV_FILES_LOADED", False)
 
 
-def test_load_env_files_reads_google_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_env_files_reads_google_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text('GOOGLE_API_KEY="test-google-key-12345678"\n', encoding="utf-8")
     load_env_files(path=env_file)

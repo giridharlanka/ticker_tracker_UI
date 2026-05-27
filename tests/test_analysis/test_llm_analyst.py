@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 from ticker_tracker.analysis.base import (
     FundamentalsResult,
     LLMAnalysis,

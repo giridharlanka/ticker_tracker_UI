@@ -8,7 +8,11 @@ from ticker_tracker.html_report import TabbedReportState, build_portfolio_tabbed
 def test_tabbed_html_includes_sheet_tabs_and_drilldown() -> None:
     html = build_portfolio_tabbed_html(
         base="SGD",
-        summary={"total_cost_basis_base": 1000, "total_current_value_base": 1100, "holding_count": 1},
+        summary={
+            "total_cost_basis_base": 1000,
+            "total_current_value_base": 1100,
+            "holding_count": 1,
+        },
         holdings=[
             {
                 "ticker": "AAPL",

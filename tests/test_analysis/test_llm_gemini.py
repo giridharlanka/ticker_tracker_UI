@@ -5,15 +5,13 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import httpx
-
+from ticker_tracker.analysis.llm_analyst import LLMAnalyst, is_llm_available
 from ticker_tracker.analysis.llm_gemini import (
     GeminiProvider,
     format_gemini_http_error,
     reset_gemini_rate_limit_for_tests,
 )
 from ticker_tracker.config import AppConfig
-from ticker_tracker.analysis.llm_analyst import LLMAnalyst, is_llm_available
 
 
 def test_gemini_provider_parses_json_response() -> None:

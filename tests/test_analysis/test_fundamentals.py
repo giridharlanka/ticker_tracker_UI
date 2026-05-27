@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from ticker_tracker.analysis.base import FundamentalsResult
 from ticker_tracker.analysis.fundamentals import (
     FundamentalsAdapter,
     normalize_analyst_recommendation,
 )
-from ticker_tracker.analysis.base import FundamentalsResult
 
 REALISTIC_YF_INFO = {
     "trailingPE": 28.5,
@@ -176,9 +176,7 @@ def test_earnings_surprise_pct(mock_ticker_cls: MagicMock) -> None:
             pd.Timestamp("2024-07-01"),
         ],
     )
-    mock_ticker_cls.return_value = _mock_ticker(
-        REALISTIC_YF_INFO, earnings_dates=earnings_dates
-    )
+    mock_ticker_cls.return_value = _mock_ticker(REALISTIC_YF_INFO, earnings_dates=earnings_dates)
 
     r = FundamentalsAdapter().get_fundamentals(["ERN"])["ERN"]
     assert r.last_earnings_surprise_pct == 5.2

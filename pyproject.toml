@@ -56,10 +56,13 @@ pythonpath = ["."]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["ticker_tracker", "tests", "main.py"]
+src = ["ticker_tracker", "tests", "main.py", "app.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"ticker_tracker/html_report.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -518,9 +518,7 @@ def build_portfolio_workbook(
     r += 1
     ws_m.cell(r, 1, ", ".join(metadata.get("fx_unavailable_tickers") or []) or "—")
 
-    include_analysis = (
-        fundamentals is not None or technicals is not None or analyses is not None
-    )
+    include_analysis = fundamentals is not None or technicals is not None or analyses is not None
     if include_analysis and fundamentals is not None and technicals is not None:
         ollama_ok = llm_available if llm_available is not None else bool(analyses)
         _add_analysis_sheet(
@@ -559,17 +557,14 @@ def build_portfolio_html_analysis_section(
     import html as html_mod
 
     parts: list[str] = ['<h3>Analysis</h3><table border="1" cellpadding="4" cellspacing="0">']
-    parts.append("<tr>" + "".join(f"<th>{html_mod.escape(h)}</th>" for h in _ANALYSIS_HEADERS) + "</tr>")
+    header_cells = "".join(f"<th>{html_mod.escape(h)}</th>" for h in _ANALYSIS_HEADERS)
+    parts.append(f"<tr>{header_cells}</tr>")
     for holding in holdings_rows:
         ticker = str(holding.get("ticker") or "")
         fund = fundamentals.get(ticker)
         tech = technicals.get(ticker)
         analysis = (analyses or {}).get(ticker)
-        signal = (
-            analysis.signal
-            if analysis and analysis.llm_available
-            else "LLM OFFLINE"
-        )
+        signal = analysis.signal if analysis and analysis.llm_available else "LLM OFFLINE"
         cells = [
             ticker,
             signal,
@@ -583,21 +578,13 @@ def build_portfolio_html_analysis_section(
             ),
             f"{fund.pe_ratio:.2f}" if fund and fund.pe_ratio is not None else "—",
             f"{fund.pb_ratio:.2f}" if fund and fund.pb_ratio is not None else "—",
-            (
-                f"{fund.net_margin * 100:.1f}%"
-                if fund and fund.net_margin is not None
-                else "—"
-            ),
+            (f"{fund.net_margin * 100:.1f}%" if fund and fund.net_margin is not None else "—"),
             (
                 f"{fund.revenue_growth_yoy * 100:.1f}%"
                 if fund and fund.revenue_growth_yoy is not None
                 else "—"
             ),
-            (
-                f"{fund.debt_to_equity:.2f}"
-                if fund and fund.debt_to_equity is not None
-                else "—"
-            ),
+            (f"{fund.debt_to_equity:.2f}" if fund and fund.debt_to_equity is not None else "—"),
             fund.analyst_recommendation if fund and fund.analyst_recommendation else "—",
             f"{fund.target_price:.2f}" if fund and fund.target_price is not None else "—",
             (
@@ -605,26 +592,14 @@ def build_portfolio_html_analysis_section(
                 if fund and fund.last_earnings_surprise_pct is not None
                 else "—"
             ),
-            (
-                " | ".join(analysis.strengths)
-                if analysis and analysis.llm_available
-                else "—"
-            ),
-            (
-                " | ".join(analysis.risks)
-                if analysis and analysis.llm_available
-                else "—"
-            ),
+            (" | ".join(analysis.strengths) if analysis and analysis.llm_available else "—"),
+            (" | ".join(analysis.risks) if analysis and analysis.llm_available else "—"),
             (
                 analysis.summary
                 if analysis and analysis.llm_available
                 else "LLM offline — per-ticker analysis unavailable."
             ),
-            (
-                "FULL"
-                if fund and fund.fundamentals_available
-                else f"SPARSE — {ticker}"
-            ),
+            ("FULL" if fund and fund.fundamentals_available else f"SPARSE — {ticker}"),
         ]
         parts.append(
             "<tr>" + "".join(f"<td>{html_mod.escape(str(c))}</td>" for c in cells) + "</tr>"

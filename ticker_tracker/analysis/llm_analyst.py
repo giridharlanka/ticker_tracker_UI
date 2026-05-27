@@ -29,7 +29,7 @@ from ticker_tracker.analysis.prompt_builder import (
     build_analysis_prompt,
     build_portfolio_summary_prompt,
 )
-from ticker_tracker.config import AppConfig, LLM_PROVIDERS
+from ticker_tracker.config import LLM_PROVIDERS, AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -183,8 +183,7 @@ class LLMAnalyst:
             confidence=coerce_confidence(parsed.get("confidence")),
             strengths=normalize_triple(parsed.get("strengths"), filler="Not specified"),
             risks=normalize_triple(parsed.get("risks"), filler="Not specified"),
-            summary=str(parsed.get("summary") or "").strip()
-            or "No summary provided.",
+            summary=str(parsed.get("summary") or "").strip() or "No summary provided.",
             generated_at=datetime.now(UTC),
             prompt_tokens_approx=len(prompt) // 4,
             llm_available=llm_available,

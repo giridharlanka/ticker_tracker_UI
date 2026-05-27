@@ -75,9 +75,27 @@ def _summary_table_rows(summary: Mapping[str, Any], base_upper: str) -> list[lis
         return _esc(v)
 
     if not cost_map and summary.get("totals_purchase_cost_formatted"):
-        rows.append(["Total invested", fmt_base(summary.get("total_cost_basis_base")), _esc(summary.get("totals_purchase_cost_formatted"))])
-        rows.append(["Current value", fmt_base(summary.get("total_current_value_base")), _esc(summary.get("totals_purchase_value_formatted"))])
-        rows.append(["Gain / loss", fmt_base(summary.get("total_gain_loss_base")), _esc(summary.get("totals_purchase_gl_formatted"))])
+        rows.append(
+            [
+                "Total invested",
+                fmt_base(summary.get("total_cost_basis_base")),
+                _esc(summary.get("totals_purchase_cost_formatted")),
+            ]
+        )
+        rows.append(
+            [
+                "Current value",
+                fmt_base(summary.get("total_current_value_base")),
+                _esc(summary.get("totals_purchase_value_formatted")),
+            ]
+        )
+        rows.append(
+            [
+                "Gain / loss",
+                fmt_base(summary.get("total_gain_loss_base")),
+                _esc(summary.get("totals_purchase_gl_formatted")),
+            ]
+        )
     else:
         for label, base_key, pmap in (
             ("Total invested", "total_cost_basis_base", cost_map),
@@ -133,9 +151,18 @@ def _metadata_rows(metadata: Mapping[str, Any], base: str) -> list[list[str]]:
                     f"{fx.get('rate')} ({fx.get('source')}, {fx.get('fetched_at')})",
                 ]
             )
-    rows.append(["Price fetch failed", _esc(", ".join(metadata.get("price_fetch_failed") or []) or "—")])
-    rows.append(["FX unavailable", _esc(", ".join(metadata.get("fx_unavailable_tickers") or []) or "—")])
-    rows.append(["Cost FX unavailable", _esc(", ".join(metadata.get("cost_fx_unavailable_tickers") or []) or "—")])
+    rows.append(
+        ["Price fetch failed", _esc(", ".join(metadata.get("price_fetch_failed") or []) or "—")]
+    )
+    rows.append(
+        ["FX unavailable", _esc(", ".join(metadata.get("fx_unavailable_tickers") or []) or "—")]
+    )
+    rows.append(
+        [
+            "Cost FX unavailable",
+            _esc(", ".join(metadata.get("cost_fx_unavailable_tickers") or []) or "—"),
+        ]
+    )
     return rows
 
 
@@ -155,7 +182,9 @@ def _analysis_cells(
     pending: bool,
 ) -> list[str]:
     if pending and fund is None and tech is None:
-        return [_esc(ticker)] + ["<span class='pending'>Loading…</span>"] * (len(_ANALYSIS_HEADERS) - 1)
+        return [_esc(ticker)] + ["<span class='pending'>Loading…</span>"] * (
+            len(_ANALYSIS_HEADERS) - 1
+        )
 
     signal = (
         analysis.signal
@@ -173,11 +202,19 @@ def _analysis_cells(
         _esc(analysis.confidence if analysis and analysis.llm_available else "—"),
         _f(tech.rsi_14 if tech else None, ".1f"),
         _f(tech.macd_histogram if tech else None, ".4f"),
-        (f"{tech.price_vs_ema200_pct:+.1f}%" if tech and tech.price_vs_ema200_pct is not None else "—"),
+        (
+            f"{tech.price_vs_ema200_pct:+.1f}%"
+            if tech and tech.price_vs_ema200_pct is not None
+            else "—"
+        ),
         _f(fund.pe_ratio if fund else None),
         _f(fund.pb_ratio if fund else None),
         (f"{fund.net_margin * 100:.1f}%" if fund and fund.net_margin is not None else "—"),
-        (f"{fund.revenue_growth_yoy * 100:.1f}%" if fund and fund.revenue_growth_yoy is not None else "—"),
+        (
+            f"{fund.revenue_growth_yoy * 100:.1f}%"
+            if fund and fund.revenue_growth_yoy is not None
+            else "—"
+        ),
         _f(fund.debt_to_equity if fund else None),
         _esc(fund.analyst_recommendation if fund and fund.analyst_recommendation else "—"),
         _f(fund.target_price if fund else None),
@@ -576,7 +613,8 @@ class TabbedReportState:
         self._emit(immediate=True)
 
     def _emit(self, *, immediate: bool = False) -> None:
-        if self.publish is None:
+        publish = self.publish
+        if publish is None:
             return
         if self._emit_timer is not None:
             self._emit_timer.cancel()
@@ -587,7 +625,7 @@ class TabbedReportState:
                 html_out = self.render()
                 if html_out != self._last_published_html:
                     self._last_published_html = html_out
-                    self.publish(html_out)
+                    publish(html_out)
 
             _do()
             return
@@ -597,7 +635,7 @@ class TabbedReportState:
             html_out = self.render()
             if html_out != self._last_published_html:
                 self._last_published_html = html_out
-                self.publish(html_out)
+                publish(html_out)
 
         self._emit_timer = threading.Timer(_EMIT_DEBOUNCE_SEC, _debounced)
         self._emit_timer.daemon = True
@@ -726,7 +764,9 @@ def build_portfolio_tabbed_html(
     n_tech = sum(1 for t in tickers if t in tech_map)
     n_llm = sum(1 for t in tickers if t in ana_map and ana_map[t].llm_available)
 
-    def tab_btn(tab_id: str, label: str, ready: bool, badge: str = "", *, active: bool = False) -> str:
+    def tab_btn(
+        tab_id: str, label: str, ready: bool, badge: str = "", *, active: bool = False
+    ) -> str:
         badge_html = f'<span class="badge">{_esc(badge)}</span>' if badge else ""
         cls = "tt-tab active" if active else "tt-tab"
         return (
@@ -853,9 +893,7 @@ def build_portfolio_tabbed_html(
                 f"<p><strong>Top action:</strong> {_esc(portfolio_summary.get('top_action', ''))}</p>"
             )
         else:
-            signals_parts.append(
-                f"<p class='tt-empty'>LLM offline — {_esc(llm_offline_hint)}</p>"
-            )
+            signals_parts.append(f"<p class='tt-empty'>LLM offline — {_esc(llm_offline_hint)}</p>")
         heat_headers = ["Ticker", *[name for name, _ in _HEATMAP_COLUMNS]]
         heat_rows: list[list[str]] = []
         for ticker in tickers:
@@ -868,9 +906,7 @@ def build_portfolio_tabbed_html(
                     row_cells.append("—")
                 else:
                     cls = "bull" if matches[0].bullish else "bear"
-                    row_cells.append(
-                        f'<span class="{cls}">{_esc(matches[0].name)}</span>'
-                    )
+                    row_cells.append(f'<span class="{cls}">{_esc(matches[0].name)}</span>')
             heat_rows.append(row_cells)
         signals_parts.append("<h3 style='font-size:0.85rem;color:var(--muted)'>Signal heatmap</h3>")
         signals_parts.append(_table(heat_headers, heat_rows, extra_class="tt-heatmap"))
@@ -905,8 +941,8 @@ def build_portfolio_tabbed_html(
         '<nav class="tt-tabs">' + "".join(tabs_html) + "</nav>",
         '<div class="tt-body">',
         '<main class="tt-panels">',
-        f'<section id="tab-holdings" class="tt-panel active">'
-        f'<h3 style="font-size:0.85rem;color:var(--muted)">Holdings</h3>'
+        '<section id="tab-holdings" class="tt-panel active">'
+        '<h3 style="font-size:0.85rem;color:var(--muted)">Holdings</h3>'
         + holdings_toolbar
         + holdings_panels
         + "</section>",
@@ -915,7 +951,9 @@ def build_portfolio_tabbed_html(
     ]
     if analysis_enabled:
         parts.append(f'<section id="tab-analysis" class="tt-panel">{analysis_panel}</section>')
-        parts.append(f'<section id="tab-signals" class="tt-panel">{"".join(signals_parts)}</section>')
+        parts.append(
+            f'<section id="tab-signals" class="tt-panel">{"".join(signals_parts)}</section>'
+        )
     parts.extend(
         [
             "</main>",

@@ -17,7 +17,7 @@ jobs:
       - name: Install
         run: pip install -e ".[dev,web]"
       - name: Ruff
-        run: ruff check ticker_tracker tests main.py && ruff format --check ticker_tracker tests main.py
+        run: ruff check ticker_tracker tests main.py app.py && ruff format --check ticker_tracker tests main.py app.py
 
   typecheck:
     runs-on: ubuntu-latest

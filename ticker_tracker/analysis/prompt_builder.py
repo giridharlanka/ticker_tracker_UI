@@ -62,7 +62,11 @@ def build_analysis_prompt(
     include_holding_context: bool = False,
 ) -> str:
     """Build the per-ticker analysis prompt (fundamentals + technicals; optional position block)."""
-    sections: list[str] = [_SYSTEM_CONTEXT, "", f"## Ticker: {ticker} (Base currency: {base_currency})"]
+    sections: list[str] = [
+        _SYSTEM_CONTEXT,
+        "",
+        f"## Ticker: {ticker} (Base currency: {base_currency})",
+    ]
 
     if include_holding_context and holding:
         shares = holding.get("shares")
@@ -72,8 +76,8 @@ def build_analysis_prompt(
         gain_loss: float | None = None
         gain_loss_pct: float | None = None
         if (
-            isinstance(cost_basis, (int, float))
-            and isinstance(current_value, (int, float))
+            isinstance(cost_basis, int | float)
+            and isinstance(current_value, int | float)
             and cost_basis != 0
         ):
             gain_loss = float(current_value) - float(cost_basis)
@@ -83,15 +87,11 @@ def build_analysis_prompt(
         if shares is not None:
             position_lines.append(f"Shares held: {shares}")
         if current_value is not None:
-            position_lines.append(
-                f"Current value ({base_currency}): {float(current_value):.2f}"
-            )
+            position_lines.append(f"Current value ({base_currency}): {float(current_value):.2f}")
         if cost_basis is not None:
             position_lines.append(f"Cost basis ({base_currency}): {float(cost_basis):.2f}")
         if gain_loss is not None and gain_loss_pct is not None:
-            position_lines.append(
-                f"Gain/loss: {gain_loss:.2f} ({gain_loss_pct:.1f}%)"
-            )
+            position_lines.append(f"Gain/loss: {gain_loss:.2f} ({gain_loss_pct:.1f}%)")
         sections.extend(position_lines)
     else:
         sections.extend(
@@ -124,29 +124,25 @@ def build_analysis_prompt(
         count = fundamentals.analyst_count
         if count is not None:
             fund_lines.append(
-                f"Analyst recommendation: {fundamentals.analyst_recommendation} "
-                f"({count} analysts)"
+                f"Analyst recommendation: {fundamentals.analyst_recommendation} ({count} analysts)"
             )
         else:
-            fund_lines.append(
-                f"Analyst recommendation: {fundamentals.analyst_recommendation}"
-            )
+            fund_lines.append(f"Analyst recommendation: {fundamentals.analyst_recommendation}")
     if fundamentals.target_price is not None:
         quote_ccy = base_currency
         if holding:
-            quote_ccy = str(
-                holding.get("native_currency") or holding.get("native_ccy") or base_currency
-            ).strip() or base_currency
-        fund_lines.append(
-            f"Analyst target price: {fundamentals.target_price} {quote_ccy}"
-        )
+            quote_ccy = (
+                str(
+                    holding.get("native_currency") or holding.get("native_ccy") or base_currency
+                ).strip()
+                or base_currency
+            )
+        fund_lines.append(f"Analyst target price: {fundamentals.target_price} {quote_ccy}")
     surprise = _fmt_float(fundamentals.last_earnings_surprise_pct, decimals=1, signed=True)
     if surprise is not None:
         fund_lines.append(f"Last earnings surprise: {surprise}%")
     quality = (
-        "FULL"
-        if fundamentals.fundamentals_available
-        else "SPARSE — limited data for this market"
+        "FULL" if fundamentals.fundamentals_available else "SPARSE — limited data for this market"
     )
     fund_lines.append(f"Fundamentals data quality: {quality}")
     sections.extend(fund_lines)
@@ -169,11 +165,7 @@ def build_analysis_prompt(
     _append_line(
         tech_lines,
         "Bollinger band width",
-        (
-            f"{technicals.bb_width_pct:.1f}%"
-            if technicals.bb_width_pct is not None
-            else None
-        ),
+        (f"{technicals.bb_width_pct:.1f}%" if technicals.bb_width_pct is not None else None),
     )
     _append_line(
         tech_lines,
@@ -185,9 +177,7 @@ def build_analysis_prompt(
         ),
     )
     if technicals.signals:
-        active = ", ".join(
-            f"{s.name}{' ▲' if s.bullish else ' ▼'}" for s in technicals.signals
-        )
+        active = ", ".join(f"{s.name}{' ▲' if s.bullish else ' ▼'}" for s in technicals.signals)
         tech_lines.append(f"Active signals: {active}")
     sections.extend(tech_lines)
 
@@ -214,8 +204,7 @@ def build_portfolio_summary_prompt(analyses: list[LLMAnalysis]) -> str:
     ]
     for a in analyses:
         lines.append(
-            f"- {a.ticker}: signal={a.signal}, confidence={a.confidence}, "
-            f"summary={a.summary}"
+            f"- {a.ticker}: signal={a.signal}, confidence={a.confidence}, summary={a.summary}"
         )
     lines.extend(
         [

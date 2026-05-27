@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
-import yfinance as yf
 
 # pandas-ta is unavailable on PyPI for py3.11; pandas-ta-classic provides the same df.ta API.
 import pandas_ta_classic  # noqa: F401
+import yfinance as yf
 
 from ticker_tracker.analysis.base import SignalLabel, TechnicalResult
 
@@ -232,9 +232,7 @@ def analyse_ohlcv(
         return result
 
     if n < 200:
-        result.warnings.append(
-            f"Only {n} days of history available — EMA200 not computed."
-        )
+        result.warnings.append(f"Only {n} days of history available — EMA200 not computed.")
 
     try:
         enriched = compute_indicators(df)
@@ -286,14 +284,8 @@ def analyse_ohlcv(
         result.bb_middle = _last_value(enriched[_COL_BB_MIDDLE])
     if _COL_BB_LOWER in enriched.columns:
         result.bb_lower = _last_value(enriched[_COL_BB_LOWER])
-    if (
-        result.bb_upper is not None
-        and result.bb_lower is not None
-        and result.bb_middle
-    ):
-        result.bb_width_pct = (
-            (result.bb_upper - result.bb_lower) / result.bb_middle * 100
-        )
+    if result.bb_upper is not None and result.bb_lower is not None and result.bb_middle:
+        result.bb_width_pct = (result.bb_upper - result.bb_lower) / result.bb_middle * 100
 
     if _COL_ATR in enriched.columns:
         result.atr_14 = _last_value(enriched[_COL_ATR])
