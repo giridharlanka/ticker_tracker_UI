@@ -28,6 +28,7 @@ def _minimal_config(tmp_path: Path) -> AppConfig:
         holdings_sheet_name="Holdings",
         column_map={"ticker": "A", "shares": "B", "cost_basis": "C"},
         upload_to_drive=False,
+        analysis_enabled=False,
     )
 
 
@@ -334,8 +335,8 @@ def test_run_once_deduplicates_recipients(
     assert out["emails_sent"] == 1
     mock_send_email.assert_called_once()
     body = mock_send_email.call_args[0][2]
-    assert "Top gainers" in body
-    assert "Worst performers" in body
+    assert "Top 5 gainers" in body
+    assert "Top 5 losers" in body
     assert "Holdings" in body
 
 
@@ -451,8 +452,11 @@ def test_build_portfolio_email_html_highlights_tables() -> None:
     assert "#d4edda" in body
     assert "#f8d7da" in body
     assert "AAA" in body and "BBB" in body
+    assert "Top 5 gainers (USD" in body
+    assert "Top 5 losers (USD" in body
     assert "Base</th>" in body
     assert "Base (SGD)" not in body
+    assert "Portfolio summary (SGD) as of " in body
 
 
 @patch("ticker_tracker.engine.upload_file")

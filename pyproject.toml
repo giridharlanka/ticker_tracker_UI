@@ -15,8 +15,11 @@ dependencies = [
   "google-auth-oauthlib>=1.2.0,<2",
   "google-auth-httplib2>=0.2.0,<1",
   "yfinance>=0.2.40,<0.3",
+  "pandas-ta-classic>=0.6.20,<0.7",
+  "httpx>=0.27.0,<0.29",
   "forex-python>=1.8,<2",
   "openpyxl>=3.1.0,<4",
+  "flask>=3.0.0,<4",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +41,13 @@ where = ["."]
 include = ["ticker_tracker*"]
 
 [tool.setuptools.package-data]
-ticker_tracker = ["web/templates/*.html", "py.typed"]
+ticker_tracker = [
+  "web/templates/*.html",
+  "web/dashboard/index.html",
+  "web/dashboard/css/*.css",
+  "web/dashboard/js/*.js",
+  "py.typed",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

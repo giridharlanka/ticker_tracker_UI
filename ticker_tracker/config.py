@@ -8,6 +8,7 @@ import os
 import platform
 import sys
 import uuid
+import warnings
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -21,8 +22,11 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 KEYRING_SERVICE = "ticker-tracker"
+KEYRING_FMP_SERVICE = "ticker-tracker-fmp"
+KEYRING_GEMINI_SERVICE = "ticker-tracker-gemini"
 KEYRING_CONFIG_KEY_USER = "config-key"
 KEYRING_FX_API_USER = "fx-api-key"
+KEYRING_FMP_API_USER = "api-key"
 HKDF_INFO = b"ticker-tracker-fernet-v1"
 LOCAL_SALT_FILE = "config.salt"
 
@@ -65,6 +69,115 @@ def set_finance_api_key(source: str, key: str | None) -> None:
         keyring.delete_password(KEYRING_SERVICE, user)
     except keyring.errors.KeyringError:
         pass
+
+
+def get_fmp_api_key() -> str | None:
+    try:
+        return keyring.get_password(KEYRING_FMP_SERVICE, KEYRING_FMP_API_USER)
+    except keyring.errors.KeyringError:
+        return None
+
+
+def set_fmp_api_key(key: str | None) -> None:
+    try:
+        if key:
+            keyring.set_password(KEYRING_FMP_SERVICE, KEYRING_FMP_API_USER, key)
+            return
+        keyring.delete_password(KEYRING_FMP_SERVICE, KEYRING_FMP_API_USER)
+    except keyring.errors.KeyringError:
+        pass
+
+
+_ENV_FILES_LOADED = False
+
+
+def _parse_env_line(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if stripped.startswith("export "):
+        stripped = stripped[7:].strip()
+    if "=" not in stripped:
+        return None
+    key, _, value = stripped.partition("=")
+    key = key.strip()
+    if not key:
+        return None
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    return key, value
+
+
+def _env_file_candidates(extra: Path | None = None) -> list[Path]:
+    seen: set[Path] = set()
+    out: list[Path] = []
+
+    def add(path: Path) -> None:
+        resolved = path.expanduser().resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        out.append(resolved)
+
+    if extra is not None:
+        add(extra)
+    add(Path.cwd() / ".env")
+    add(Path(__file__).resolve().parents[1] / ".env")
+    add(application_config_dir() / ".env")
+    return out
+
+
+def load_env_files(*, path: Path | None = None) -> None:
+    """Load ``.env`` into ``os.environ`` without overriding variables already set."""
+    global _ENV_FILES_LOADED
+    if _ENV_FILES_LOADED and path is None:
+        return
+    for env_path in _env_file_candidates(path):
+        if not env_path.is_file():
+            continue
+        try:
+            text = env_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            parsed = _parse_env_line(line)
+            if parsed is None:
+                continue
+            key, value = parsed
+            if key not in os.environ:
+                os.environ[key] = value
+    if path is None:
+        _ENV_FILES_LOADED = True
+
+
+def get_gemini_api_key() -> str | None:
+    """Gemini API key from keychain, else GEMINI_API_KEY or GOOGLE_API_KEY env."""
+    load_env_files()
+    try:
+        stored = keyring.get_password(KEYRING_GEMINI_SERVICE, KEYRING_FMP_API_USER)
+        if stored:
+            return stored
+    except keyring.errors.KeyringError:
+        pass
+    for env_name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        val = os.environ.get(env_name, "").strip()
+        if val:
+            return val
+    return None
+
+
+def set_gemini_api_key(key: str | None) -> None:
+    try:
+        if key:
+            keyring.set_password(KEYRING_GEMINI_SERVICE, KEYRING_FMP_API_USER, key)
+            return
+        keyring.delete_password(KEYRING_GEMINI_SERVICE, KEYRING_FMP_API_USER)
+    except keyring.errors.KeyringError:
+        pass
+
+
+LLM_PROVIDERS = frozenset({"ollama", "gemini"})
 
 
 def _machine_fingerprint() -> bytes:
@@ -160,11 +273,18 @@ class AppConfig:
     upload_to_drive: bool = False
     output_formats: list[str] = field(default_factory=lambda: ["xlsx"])
     local_report_dir: str = ""
+    analysis_enabled: bool = True
+    llm_provider: str = "ollama"
+    analysis_model: str = "qwen2.5:7b"
+    ollama_url: str = "http://localhost:11434"
+    gemini_model: str = "gemini-2.0-flash"
+    llm_include_holding_context: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        # Stored encrypted schema: FX API key lives in OS keychain when needed.
+        # Stored encrypted schema: FX/FMP API keys live in OS keychain when needed.
         payload["fx_api_key"] = None
+        payload["fmp_api_key"] = None
         return payload
 
     @classmethod
@@ -185,6 +305,16 @@ class AppConfig:
             upload_to_drive=bool(data.get("upload_to_drive", False)),
             output_formats=list(data.get("output_formats") or ["xlsx"]),
             local_report_dir=str(data.get("local_report_dir") or ""),
+            analysis_enabled=bool(data.get("analysis_enabled", True)),
+            llm_provider=(
+                p
+                if (p := str(data.get("llm_provider") or "ollama").strip().lower()) in LLM_PROVIDERS
+                else "ollama"
+            ),
+            analysis_model=str(data.get("analysis_model") or "qwen2.5:7b"),
+            ollama_url=str(data.get("ollama_url") or "http://localhost:11434"),
+            gemini_model=str(data.get("gemini_model") or "gemini-2.0-flash"),
+            llm_include_holding_context=bool(data.get("llm_include_holding_context", False)),
         )
 
 
@@ -194,6 +324,17 @@ class EncryptedConfig:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or default_config_path()
 
+    def can_decrypt(self) -> bool:
+        """Return whether ``config.enc`` exists and decrypts with this machine's key material."""
+        if not self.path.is_file():
+            return True
+        fernet = _fernet_from_keychain()
+        try:
+            fernet.decrypt(self.path.read_bytes())
+            return True
+        except InvalidToken:
+            return False
+
     def load(self) -> AppConfig:
         if not self.path.is_file():
             return AppConfig()
@@ -201,11 +342,14 @@ class EncryptedConfig:
         raw = self.path.read_bytes()
         try:
             decrypted = fernet.decrypt(raw)
-        except InvalidToken as exc:
-            raise ValueError(
+        except InvalidToken:
+            warnings.warn(
                 "Could not decrypt config.enc (wrong machine, missing keychain entry, "
-                "or corrupt file)."
-            ) from exc
+                "or corrupt file). Using default empty settings until you save setup again.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return AppConfig()
         payload = json.loads(decrypted.decode("utf-8"))
         return AppConfig.from_dict(payload)
 

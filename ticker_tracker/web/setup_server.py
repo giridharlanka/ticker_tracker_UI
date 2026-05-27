@@ -12,7 +12,9 @@ from ticker_tracker.config import (
     EncryptedConfig,
     default_config_path,
     get_finance_api_key,
+    get_fmp_api_key,
     get_fx_api_key,
+    get_gemini_api_key,
 )
 from ticker_tracker.setup_core import (
     DEFAULT_COLUMN_LETTERS,
@@ -67,6 +69,16 @@ def _default_form() -> dict[str, Any]:
         "finance_selected": [],
         "finance_key_action": {s: "keep" for s in KNOWN_FINANCE_SOURCES if s != "yahoo"},
         "fx_key_action": "keep",
+        "analysis_enabled": True,
+        "llm_provider": "ollama",
+        "ollama_url": "http://localhost:11434",
+        "analysis_model": "qwen2.5:7b",
+        "gemini_model": "gemini-2.0-flash",
+        "llm_include_holding_context": False,
+        "fmp_key_action": "keep",
+        "key_fmp": "",
+        "gemini_key_action": "keep",
+        "key_gemini": "",
         **{f"key_{s}": "" for s in KNOWN_FINANCE_SOURCES if s != "yahoo"},
         **cols,
     }
@@ -136,14 +148,33 @@ def _form_from_config(enc: EncryptedConfig) -> dict[str, Any]:
     form["finance_selected"] = list(cfg.finance_sources)
     form["output_formats"] = list(cfg.output_formats or ["xlsx"])
     form["local_report_dir"] = cfg.local_report_dir
+    form["analysis_enabled"] = cfg.analysis_enabled
+    form["llm_provider"] = cfg.llm_provider
+    form["ollama_url"] = cfg.ollama_url
+    form["analysis_model"] = cfg.analysis_model
+    form["gemini_model"] = cfg.gemini_model
+    form["llm_include_holding_context"] = cfg.llm_include_holding_context
     for field, _ in RECOMMENDED_COLUMNS:
         if field in cfg.column_map:
             form[f"col_{field}"] = cfg.column_map[field]
     return form
 
 
-def _key_statuses() -> dict[str, str]:
-    status: dict[str, str] = {"fx": "exists (hidden)" if get_fx_api_key() else "not set"}
+def _key_statuses(*, gemini_probe: bool = False) -> dict[str, str]:
+    gemini_status = "not set"
+    if get_gemini_api_key():
+        gemini_status = "exists (hidden)"
+        if gemini_probe:
+            from ticker_tracker.analysis.llm_gemini import probe_gemini_api_key
+
+            probe_err = probe_gemini_api_key()
+            if probe_err:
+                gemini_status = f"rejected — {probe_err[:120]}"
+    status: dict[str, str] = {
+        "fx": "exists (hidden)" if get_fx_api_key() else "not set",
+        "fmp": "exists (hidden)" if get_fmp_api_key() else "not set",
+        "gemini": gemini_status,
+    }
     for sid in KNOWN_FINANCE_SOURCES:
         if sid == "yahoo":
             continue

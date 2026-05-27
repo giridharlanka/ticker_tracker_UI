@@ -6,6 +6,7 @@ import html
 import logging
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,16 @@ from ticker_tracker.google.drive import upload_file
 from ticker_tracker.google.gmail import send_email
 from ticker_tracker.google.sheets import read_holdings
 from ticker_tracker.local_holdings import read_local_holdings
-from ticker_tracker.report_builder import build_portfolio_workbook, default_workbook_filename
+from ticker_tracker.analysis.base import FundamentalsResult, LLMAnalysis, TechnicalResult
+from ticker_tracker.analysis.fundamentals import FundamentalsAdapter
+from ticker_tracker.analysis.llm_analyst import LLMAnalyst, is_llm_available, llm_offline_hint
+from ticker_tracker.analysis.technicals import TechnicalAnalyser
+from ticker_tracker.html_report import TabbedReportState, build_portfolio_tabbed_html
+from ticker_tracker.report_builder import (
+    build_portfolio_html_analysis_section,
+    build_portfolio_workbook,
+    default_workbook_filename,
+)
 from ticker_tracker.setup_core import resolve_local_report_dir
 
 logger = logging.getLogger(__name__)
@@ -114,6 +124,39 @@ def _row_price_symbol(row: dict[str, Any]) -> str:
     t = str(row.get("ticker") or "").strip()
     ex = str(row.get("exchange") or "").strip()
     return build_yahoo_price_symbol(t, ex)
+
+
+def _yahoo_symbols_for_rows(rows_raw: list[dict[str, Any]]) -> tuple[list[str], dict[str, str]]:
+    """
+    Map holdings rows to Yahoo symbols for analysis.
+
+    Returns (ordered yahoo symbols, yahoo_symbol -> sheet ticker).
+    """
+    yahoo_to_sheet: dict[str, str] = {}
+    ordered: list[str] = []
+    for row in rows_raw:
+        sheet = str(row.get("ticker") or "").strip()
+        if not sheet:
+            continue
+        yahoo = _row_price_symbol(row)
+        if yahoo not in ordered:
+            ordered.append(yahoo)
+        yahoo_to_sheet[yahoo] = sheet
+    return ordered, yahoo_to_sheet
+
+
+def _remap_analysis_results(
+    by_yahoo: dict[str, Any],
+    yahoo_to_sheet: dict[str, str],
+) -> dict[str, Any]:
+    """Re-key analysis results from Yahoo symbol to sheet ticker."""
+    out: dict[str, Any] = {}
+    for yahoo, value in by_yahoo.items():
+        sheet = yahoo_to_sheet.get(yahoo, yahoo)
+        if hasattr(value, "ticker"):
+            value.ticker = sheet
+        out[sheet] = value
+    return out
 
 
 def _purchase_currency_iso(row: dict[str, Any]) -> str | None:
@@ -231,6 +274,9 @@ def _merge_holdings_rows_for_ticker(rows: list[dict[str, Any]]) -> dict[str, Any
         "gain_loss_base": gl_b,
         "gain_loss_pct": gl_pct_base,
         "aggregate_rank_excluded": excluded,
+        "base_currency": first.get("base_currency"),
+        "market_code": first.get("market_code"),
+        "native_ccy": first.get("native_ccy"),
     }
 
     def _dash_purchase_side() -> None:
@@ -268,6 +314,16 @@ def _merge_holdings_rows_for_ticker(rows: list[dict[str, Any]]) -> dict[str, Any
     return merged
 
 
+def aggregate_holdings_for_display(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    One row per ticker for reports (weighted-average cost across multiple lots).
+
+    Sheet rows with the same ticker at different purchase prices are merged so
+    holdings tables match how portfolios are usually viewed.
+    """
+    return _aggregate_holdings_by_ticker(holdings)
+
+
 def _aggregate_holdings_by_ticker(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from collections import defaultdict
 
@@ -277,6 +333,19 @@ def _aggregate_holdings_by_ticker(holdings: list[dict[str, Any]]) -> list[dict[s
         if not k:
             continue
         buckets[k].append(h)
+    return [_merge_holdings_rows_for_ticker(rows) for rows in buckets.values()]
+
+
+def _aggregate_holdings_by_ticker_currency(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+
+    buckets: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for h in holdings:
+        ticker = str(h.get("ticker") or "").strip().upper()
+        report_ccy = str(h.get("report_ccy") or "").strip().upper()
+        if not ticker or not report_ccy:
+            continue
+        buckets[(ticker, report_ccy)].append(h)
     return [_merge_holdings_rows_for_ticker(rows) for rows in buckets.values()]
 
 
@@ -297,6 +366,32 @@ def _rank_best_worst(
     best = by_pct[:n]
     worst = sorted(elig, key=lambda x: float(x.get("gain_loss_pct") or 0.0))[:n]
     return best, worst
+
+
+def _rank_best_worst_by_currency(
+    holdings: list[dict[str, Any]], *, n: int = 5
+) -> dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]]:
+    aggregated = _aggregate_holdings_by_ticker_currency(holdings)
+    by_ccy: dict[str, list[dict[str, Any]]] = {}
+    for h in aggregated:
+        if h.get("aggregate_rank_excluded"):
+            continue
+        ccy = str(h.get("report_ccy") or "").strip().upper()
+        if not ccy or ccy == "MIXED":
+            continue
+        if float(h.get("cost_basis_purchase") or 0.0) <= 0:
+            continue
+        if not isinstance(h.get("gain_loss_pct_purchase"), int | float):
+            continue
+        by_ccy.setdefault(ccy, []).append(h)
+
+    out: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
+    for ccy in sorted(by_ccy):
+        elig = by_ccy[ccy]
+        best = sorted(elig, key=lambda x: float(x["gain_loss_pct_purchase"]), reverse=True)[:n]
+        worst = sorted(elig, key=lambda x: float(x["gain_loss_pct_purchase"]))[:n]
+        out[ccy] = (best, worst)
+    return out
 
 
 def _holding_table_rows(holdings: list[dict[str, Any]]) -> list[list[str]]:
@@ -398,6 +493,21 @@ def _portfolio_summary_email_rows(summary: Mapping[str, Any], base_upper: str) -
     return rows
 
 
+_EMAIL_MOBILE_CSS = """
+body { margin: 0; padding: 12px; -webkit-text-size-adjust: 100%; }
+.tt-wrap { max-width: 720px; margin: 0 auto; }
+.tt-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0.75rem 0; }
+table { width: 100%; min-width: 480px; }
+@media (max-width: 600px) {
+  body { padding: 8px; font-size: 14px; }
+  h2 { font-size: 1.1rem; }
+  h3 { font-size: 0.95rem; }
+  table { min-width: 520px; font-size: 12px; }
+  th, td { padding: 4px 6px; }
+}
+"""
+
+
 def build_portfolio_email_html(
     *,
     base: str,
@@ -405,17 +515,30 @@ def build_portfolio_email_html(
     holdings: list[dict[str, Any]],
     drive_url: str | None,
 ) -> str:
-    """HTML body for the notification email (tables + top/bottom performers)."""
+    """HTML body for email (mobile-friendly tables; no JavaScript)."""
     b = base.upper()
     eb = html.escape(b)
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     parts: list[str] = [
-        '<html><body style="font-family:system-ui,-apple-system,sans-serif;line-height:1.45">',
-        f'<h2 style="margin-bottom:0.25rem">Portfolio summary ({eb})</h2>',
+        "<html><head>",
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"<style>{_EMAIL_MOBILE_CSS}</style>",
+        "</head>",
+        '<body style="font-family:system-ui,-apple-system,sans-serif;line-height:1.45">',
+        '<div class="tt-wrap">',
+        (
+            f'<h2 style="margin-bottom:0.25rem">'
+            f"Portfolio summary ({eb}) as of {html.escape(generated_at)}"
+            "</h2>"
+        ),
     ]
 
     summary_headers = ["Metric", "Base", "Purchased"]
     summary_rows = _portfolio_summary_email_rows(summary, b)
+    parts.append('<div class="tt-scroll">')
     parts.append(_html_table(summary_headers, summary_rows))
+    parts.append("</div>")
 
     hold_headers = [
         "Ticker",
@@ -428,10 +551,11 @@ def build_portfolio_email_html(
         "G/L (purch.)",
         "G/L %",
     ]
-    parts.append("<h3>Holdings (per row, purchased currency)</h3>")
+    parts.append("<h3>Holdings (one row per ticker, purchased currency)</h3>")
+    parts.append('<div class="tt-scroll">')
     parts.append(_html_table(hold_headers, _holding_table_rows(holdings)))
+    parts.append("</div>")
 
-    best, worst = _rank_best_worst(holdings, n=3)
     perf_cols = [
         "Ticker",
         "Shares",
@@ -441,30 +565,44 @@ def build_portfolio_email_html(
         "G/L %",
     ]
 
-    parts.append("<h3>Top gainers (by return %, distinct tickers)</h3>")
-    if best:
-        parts.append(_html_table(perf_cols, _perf_table_rows(best), table_bg="#d4edda"))
-    else:
+    ranked_by_ccy = _rank_best_worst_by_currency(holdings, n=5)
+    if not ranked_by_ccy:
+        parts.append("<h3>Top 5 gainers / losers (by return %, per currency)</h3>")
         parts.append(
             "<p><i>No holdings with valid prices, FX, and positive cost basis for ranking.</i></p>"
         )
+    else:
+        for ccy, (best, worst) in ranked_by_ccy.items():
+            esc_ccy = html.escape(ccy)
+            parts.append(f"<h3>Top 5 gainers ({esc_ccy}, by return %, distinct tickers)</h3>")
+            if best:
+                parts.append('<div class="tt-scroll">')
+                parts.append(_html_table(perf_cols, _perf_table_rows(best), table_bg="#d4edda"))
+                parts.append("</div>")
+            else:
+                parts.append("<p><i>No eligible holdings for this currency.</i></p>")
 
-    parts.append("<h3>Worst performers (by return %, distinct tickers)</h3>")
-    if worst:
-        parts.append(_html_table(perf_cols, _perf_table_rows(worst), table_bg="#f8d7da"))
-    else:
-        parts.append(
-            "<p><i>No holdings with valid prices, FX, and positive cost basis for ranking.</i></p>"
-        )
+            parts.append(f"<h3>Top 5 losers ({esc_ccy}, by return %, distinct tickers)</h3>")
+            if worst:
+                parts.append('<div class="tt-scroll">')
+                parts.append(_html_table(perf_cols, _perf_table_rows(worst), table_bg="#f8d7da"))
+                parts.append("</div>")
+            else:
+                parts.append("<p><i>No eligible holdings for this currency.</i></p>")
 
     if drive_url:
         safe = html.escape(drive_url, quote=True)
         parts.append(f'<p><a href="{safe}">Open report in Google Drive</a></p>')
     parts.append(
         '<p style="color:#555;font-size:0.9rem">'
+        "Open the attached HTML report for the full interactive tabbed view (Analysis, signals, "
+        "ticker drill-down). This email uses a simplified layout for mobile inboxes.</p>"
+    )
+    parts.append(
+        '<p style="color:#555;font-size:0.9rem">'
         "Detailed numbers are also in the attached workbook.</p>"
     )
-    parts.append("</body></html>")
+    parts.append("</div></body></html>")
     return "".join(parts)
 
 
@@ -474,15 +612,33 @@ def build_portfolio_html_report(
     summary: Mapping[str, Any],
     holdings: list[dict[str, Any]],
     drive_url: str | None,
+    metadata: Mapping[str, Any] | None = None,
+    holdings_lots: list[dict[str, Any]] | None = None,
+    fundamentals: dict[str, FundamentalsResult] | None = None,
+    technicals: dict[str, TechnicalResult] | None = None,
+    analyses: dict[str, LLMAnalysis] | None = None,
+    portfolio_summary: Mapping[str, str] | None = None,
+    llm_offline_hint: str = "Ensure the analysis LLM is configured and reachable.",
+    llm_available: bool | None = None,
 ) -> str:
-    """Standalone HTML report for local viewing."""
-    body = build_portfolio_email_html(
+    """Standalone HTML report for local viewing (tabbed; mirrors workbook sheets)."""
+    ollama_ok = llm_available if llm_available is not None else bool(analyses)
+    has_analysis = fundamentals is not None and technicals is not None
+    return build_portfolio_tabbed_html(
         base=base,
         summary=summary,
         holdings=holdings,
+        holdings_lots=holdings_lots,
+        metadata=metadata or {},
         drive_url=drive_url,
+        fundamentals=fundamentals,
+        technicals=technicals,
+        analyses=analyses,
+        portfolio_summary=portfolio_summary,
+        llm_offline_hint=llm_offline_hint,
+        llm_available=ollama_ok,
+        analysis_enabled=has_analysis,
     )
-    return body
 
 
 def run_once(
@@ -493,8 +649,12 @@ def run_once(
     upload_to_drive: bool | None = None,
     send_email_notifications: bool = True,
     workbook_path: Path | None = None,
+    allow_local_file_email: bool = False,
     status_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
+    report_state: TabbedReportState | None = None,
+    on_analysis_ticker: Callable[[str, LLMAnalysis], None] | None = None,
+    analysis_enabled: bool | None = None,
 ) -> dict[str, Any]:
     """
     End-to-end portfolio run for multi-currency holdings.
@@ -505,8 +665,19 @@ def run_once(
 
     *progress_callback*, when set, receives ``(percent_0_to_100, message)`` at coarse milestones
     (e.g. CLI progress bar). *status_callback* is still invoked with the same *message* text.
+
+    *report_state*, when set, publishes tabbed HTML after each milestone (holdings/summary/metadata,
+    then per-ticker fundamentals, technicals, LLM).
+
+    *on_analysis_ticker*, when set, is invoked after each successful LLM ticker analysis.
+
+    When *holdings_source* is ``local_file``, notification email is normally disabled. Pass
+    *allow_local_file_email* ``True`` (e.g. dashboard upload + user opt-in) to honor
+    *send_email_notifications* instead.
     """
     cfg = app_config if app_config is not None else (encrypted_config or EncryptedConfig()).load()
+    if analysis_enabled is not None:
+        cfg = replace(cfg, analysis_enabled=analysis_enabled)
     if not cfg.column_map:
         raise ValueError("Config is missing column_map.")
 
@@ -523,7 +694,8 @@ def run_once(
     use_drive = cfg.upload_to_drive if upload_to_drive is None else upload_to_drive
     if cfg.holdings_source == "local_file":
         use_drive = False
-        send_email_notifications = False
+        if not allow_local_file_email:
+            send_email_notifications = False
 
     _progress(5, "Starting portfolio run…")
     _progress(10, "Reading holdings…")
@@ -713,6 +885,18 @@ def run_once(
 
     _progress(62, "Computing portfolio summary…")
     summary = portfolio_summary(enriched)
+    display_holdings = aggregate_holdings_for_display(enriched)
+    row_count = int(summary.get("holding_row_count") or len(enriched))
+    summary = {
+        **summary,
+        "assumption_notes": [
+            *(summary.get("assumption_notes") or []),
+            (
+                f"Holdings tables show one row per ticker ({len(display_holdings)} positions "
+                f"from {row_count} sheet row(s)); cost basis uses weighted averages across lots."
+            ),
+        ],
+    }
     run_ts = datetime.now(UTC).isoformat()
 
     finance_by_ticker: dict[str, str] = {}
@@ -741,6 +925,113 @@ def run_once(
         "cost_fx_unavailable_tickers": sorted(set(cost_fx_unavailable)),
     }
 
+    llm_hint = llm_offline_hint(cfg)
+
+    if report_state is not None:
+        report_state.set_core(
+            base=base,
+            summary=summary,
+            holdings=display_holdings,
+            holdings_lots=enriched,
+            metadata=metadata,
+            drive_url=None,
+            analysis_enabled=cfg.analysis_enabled,
+            llm_offline_hint=llm_hint,
+        )
+
+    fundamentals_by_ticker = None
+    technicals_by_ticker = None
+    analyses_by_ticker: dict[str, LLMAnalysis] | None = None
+    llm_portfolio_summary: dict[str, str] | None = None
+    ollama_ok = False
+
+    if cfg.analysis_enabled:
+        yahoo_symbols, yahoo_to_sheet = _yahoo_symbols_for_rows(rows_raw)
+        n_analysis = len(yahoo_symbols) or 1
+
+        def _fund_progress(i: int, n: int, symbol: str) -> None:
+            sheet = yahoo_to_sheet.get(symbol, symbol)
+            _progress(
+                64 + min(4, int(4 * i / max(n, 1))),
+                f"Fundamentals {sheet} ({i}/{n})…",
+            )
+
+        _progress(64, f"Fetching fundamentals for {n_analysis} ticker(s)…")
+
+        def _fund_result_cb(yahoo_sym: str, result: FundamentalsResult) -> None:
+            if report_state is None:
+                return
+            sheet_t = yahoo_to_sheet.get(yahoo_sym, yahoo_sym)
+            report_state.set_fundamental(sheet_t, result)
+
+        fund_yahoo = FundamentalsAdapter().get_fundamentals(
+            yahoo_symbols,
+            progress_callback=_fund_progress,
+            ticker_result_callback=_fund_result_cb if report_state else None,
+        )
+        fundamentals_by_ticker = _remap_analysis_results(fund_yahoo, yahoo_to_sheet)
+
+        _progress(68, f"Technical analysis for {n_analysis} ticker(s)…")
+        tech_yahoo = TechnicalAnalyser().analyse(yahoo_symbols)
+        technicals_by_ticker = _remap_analysis_results(tech_yahoo, yahoo_to_sheet)
+        if report_state is not None:
+            report_state.set_technicals(technicals_by_ticker)
+
+        ollama_ok = is_llm_available(cfg)
+        logger.info(
+            "LLM provider %s available: %s",
+            cfg.llm_provider,
+            ollama_ok,
+        )
+        if not ollama_ok:
+            logger.warning(
+                "%s — skipping LLM ticker analysis; "
+                "fundamentals and technicals will still appear in the report.",
+                llm_hint,
+            )
+        else:
+            analyst = LLMAnalyst(cfg)
+            analyses_by_ticker = {}
+            llm_results: list[LLMAnalysis] = []
+            llm_tickers = list(
+                dict.fromkeys(str(h.get("ticker") or "") for h in display_holdings if h.get("ticker"))
+            )
+            n_llm = len(llm_tickers) or 1
+            holdings_by_ticker = {
+                str(h.get("ticker") or ""): h for h in display_holdings if h.get("ticker")
+            }
+            for idx, ticker in enumerate(llm_tickers, start=1):
+                fund = fundamentals_by_ticker.get(ticker)
+                tech = technicals_by_ticker.get(ticker)
+                if fund is None or tech is None:
+                    continue
+                holding = holdings_by_ticker.get(ticker, {})
+                msg = f"LLM analysis {ticker} ({idx}/{n_llm})…"
+                _progress(69 + min(1, int(idx / max(n_llm, 1))), msg)
+                logger.info("LLM analysing %s (%s/%s)…", ticker, idx, n_llm)
+                holding_dict = {
+                    "shares": holding.get("shares"),
+                    "cost_basis_base": holding.get("cost_basis_base"),
+                    "current_value_base": holding.get("current_value_base"),
+                    "native_currency": holding.get("native_ccy"),
+                }
+                analysis = analyst.analyse_ticker(
+                    ticker, fund, tech, base, holding_dict
+                )
+                analyses_by_ticker[ticker] = analysis
+                llm_results.append(analysis)
+                if report_state is not None:
+                    report_state.set_analysis(ticker, analysis)
+                if on_analysis_ticker is not None:
+                    on_analysis_ticker(ticker, analysis)
+            _progress(70, "Generating portfolio commentary…")
+            llm_portfolio_summary = analyst.analyse_portfolio(llm_results)
+            if report_state is not None:
+                report_state.set_portfolio_summary(
+                    llm_portfolio_summary,
+                    llm_available=ollama_ok,
+                )
+
     output_formats = list(dict.fromkeys(cfg.output_formats or ["xlsx"]))
     workbook_out_path: Path | None = None
     html_out_path: Path | None = None
@@ -757,9 +1048,15 @@ def run_once(
         build_portfolio_workbook(
             workbook_out_path,
             base_currency=base,
-            holdings_rows=enriched,
+            holdings_rows=display_holdings,
             summary=summary,
             metadata=metadata,
+            fundamentals=fundamentals_by_ticker,
+            technicals=technicals_by_ticker,
+            analyses=analyses_by_ticker,
+            portfolio_summary=llm_portfolio_summary,
+            llm_offline_hint=llm_hint,
+            llm_available=ollama_ok if cfg.analysis_enabled else None,
         )
     if "html" in output_formats:
         base_name = Path(fname).stem
@@ -768,11 +1065,21 @@ def run_once(
             build_portfolio_html_report(
                 base=base,
                 summary=summary,
-                holdings=enriched,
+                holdings=display_holdings,
+                holdings_lots=enriched,
                 drive_url=None,
+                metadata=metadata,
+                fundamentals=fundamentals_by_ticker,
+                technicals=technicals_by_ticker,
+                analyses=analyses_by_ticker,
+                portfolio_summary=llm_portfolio_summary,
+                llm_offline_hint=llm_hint,
+                llm_available=ollama_ok if cfg.analysis_enabled else None,
             ),
             encoding="utf-8",
         )
+    if report_state is not None:
+        report_state.flush()
     _progress(80, "Report file(s) ready.")
 
     drive_url: str | None = None
@@ -789,7 +1096,7 @@ def run_once(
         body = build_portfolio_email_html(
             base=base,
             summary=summary,
-            holdings=enriched,
+            holdings=display_holdings,
             drive_url=drive_url,
         )
         recipients: list[str] = []
@@ -820,16 +1127,25 @@ def run_once(
     else:
         _progress(100, "Done! Report saved locally.")
 
+    email_html = build_portfolio_email_html(
+        base=base,
+        summary=summary,
+        holdings=display_holdings,
+        drive_url=drive_url,
+    )
+
     return {
         "config": cfg,
         "summary": summary,
         "holdings": enriched,
+        "holdings_display": display_holdings,
         "workbook_path": str(workbook_out_path) if workbook_out_path else None,
         "workbook_filename": fname if workbook_out_path else None,
         "html_report_path": str(html_out_path) if html_out_path else None,
         "drive_url": drive_url,
         "emails_sent": emails_sent,
         "metadata": metadata,
+        "email_html": email_html,
     }
 
 

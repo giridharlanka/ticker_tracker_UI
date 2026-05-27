@@ -7,11 +7,13 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from ticker_tracker.analysis.llm_analyst import is_ollama_available
 from ticker_tracker.config import (
     AppConfig,
     EncryptedConfig,
     default_config_path,
     get_finance_api_key,
+    get_fmp_api_key,
     get_fx_api_key,
 )
 from ticker_tracker.currency import normalize_iso4217
@@ -24,7 +26,9 @@ from ticker_tracker.setup_core import (
     OPTIONAL_COLUMN_FIELDS,
     OUTPUT_FORMATS,
     RECOMMENDED_COLUMNS,
+    SUGGESTED_ANALYSIS_MODELS,
     apply_setup,
+    validate_ollama_url,
 )
 from ticker_tracker.setup_help import print_section
 
@@ -183,6 +187,67 @@ def _collect_local_report_dir() -> str:
     ).strip()
 
 
+def _collect_fmp_api_key_optional() -> str | None:
+    """Return FMP key action: None = leave keychain unchanged, '' = clear, else new key."""
+    if not _prompt_yes_no(
+        "  Do you have a Financial Modeling Prep API key? "
+        "(optional — improves data for SGX/HKEx tickers)",
+        default=False,
+    ):
+        return None
+    existing = bool(get_fmp_api_key())
+    print(f"    FMP key status: {'exists (hidden)' if existing else 'not set'}")
+    action = (
+        _prompt(
+            "    Key action: [k]eep existing, [r]eplace with new key, [c]lear existing",
+            "k",
+        )
+        .strip()
+        .lower()
+    )
+    if action == "c":
+        return ""
+    if action == "r":
+        return input("    New FMP API key: ").strip() or None
+    return None
+
+
+def _collect_analysis_config() -> tuple[bool, str, str, str | None]:
+    """
+    Analysis wizard step. Returns
+    (analysis_enabled, ollama_url, analysis_model, fmp_api_key).
+    """
+    print_section("analysis_configuration")
+    enabled = _prompt_yes_no(
+        "Enable fundamental and technical analysis? (recommended: yes)",
+        default=True,
+    )
+    if not enabled:
+        return False, "http://localhost:11434", "qwen2.5:7b", None
+
+    ollama_url = _prompt("Ollama URL", "http://localhost:11434").strip().rstrip("/")
+    url_issues = validate_ollama_url(ollama_url)
+    if url_issues:
+        print("  URL validation:")
+        for msg in url_issues:
+            print(f"    - {msg}")
+    elif is_ollama_available(ollama_url):
+        print("  Ollama connectivity: reachable (GET /api/tags returned 200).")
+    else:
+        print(
+            "  Warning: could not reach Ollama at that URL. "
+            "Setup will continue — start Ollama before your first analysed run."
+        )
+
+    print("  Suggested models:")
+    for name, hint in SUGGESTED_ANALYSIS_MODELS:
+        print(f"    - {name} ({hint})")
+    analysis_model = _prompt("Ollama model to use for analysis", "qwen2.5:7b").strip()
+
+    fmp_key = _collect_fmp_api_key_optional()
+    return enabled, ollama_url, analysis_model, fmp_key
+
+
 def _collect_market_overrides() -> dict[str, str]:
     print_section("market_overrides")
     if not _prompt_yes_no("Add any custom suffix → currency mappings?", False):
@@ -225,6 +290,8 @@ def run_wizard(save_path: Callable[[], EncryptedConfig] | None = None) -> AppCon
 
     fx_source, fx_key = _collect_fx_source()
 
+    analysis_enabled, ollama_url, analysis_model, fmp_key = _collect_analysis_config()
+
     overrides = _collect_market_overrides()
 
     print_section("upload_to_drive")
@@ -258,6 +325,10 @@ def run_wizard(save_path: Callable[[], EncryptedConfig] | None = None) -> AppCon
         output_formats=output_formats,
         local_report_dir=local_report_dir,
         encrypted_config=enc,
+        analysis_enabled=analysis_enabled,
+        ollama_url=ollama_url,
+        analysis_model=analysis_model,
+        fmp_api_key=fmp_key,
     )
     if issues:
         print("\nVerification found problems (nothing was saved):")

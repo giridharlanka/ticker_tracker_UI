@@ -40,8 +40,8 @@ cd ticker-tracker
 python3.11 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install "."
-# optional: local Flask setup UI + pytest/ruff/mypy (contributors)
-pip install -e ".[dev,web]"
+# optional: pytest, ruff, mypy (contributors)
+pip install -e ".[dev]"
 ```
 
 Use `pip install -e .` instead of `pip install .` if you want an editable checkout while iterating.
@@ -66,7 +66,26 @@ ticker-tracker-setup
 
 Reports are written to your configured `local_report_dir`; if blank, the app uses your OS temp directory.
 
-**Review saved settings** (read-only; same fields as `config.enc`, not keychain secrets):
+### Web dashboard (browser UI)
+
+From the repository root, after `pip install .` (Flask is included in the default dependencies):
+
+```bash
+python app.py
+```
+
+Then open **http://127.0.0.1:5225/** (localhost only). Override the bind address or port with **`TICKER_DASHBOARD_HOST`** and **`TICKER_DASHBOARD_PORT`** if needed.
+
+The dashboard is a **single-process** local server: it serves the HTML/CSS/JS under `ticker_tracker/web/dashboard/` and calls the same portfolio engine as the CLI.
+
+- **Settings** — Edit and save the same options as the setup wizard (`config.enc` plus keychain API keys), including **Analysis** (enable/disable, **Ollama** or **Gemini Flash**, models, optional FMP API key). Holdings are **not** sent to the LLM by default. Local file paths and the on-disk report folder are controlled in the **Run** panel per analysis (saved values in `config.enc` are still used to prefill the Run panel and for CLI/Tk). Secret keys are never shown in full; you can **keep**, **replace**, or **clear** each key.
+- **Run** — **Output folder** (where HTML/XLSX are written for that run) with optional **Browse…** (native folder picker via the local Python process). For **upload**, set a **path on this computer**, browse to a file, and/or drag-and-drop; set the **XLSX tab** name when needed. **Analyse** from **Google Sheets** uses the saved Sheet ID and column map, or from **upload** for a one-off file. The preview always shows **HTML**; an **Excel** file is written only if **`xlsx`** is enabled in Settings (same as other runs).
+- **Send email after analysis** — Checked by default; uses the **Gmail API** and the addresses in Settings. For uploaded files, this opts in to mail even though CLI/Tk runs with `local_file` normally skip notifications.
+- **Email report** — Sends the **HTML body** of the last successful preview to every address in Settings (no attachment).
+
+You still need **`credentials.json`** in the app config directory (see [Google Cloud setup](#google-cloud-setup-step-by-step)) for Sheets, optional Drive upload, and Gmail.
+
+**Review saved settings** (read-only JSON; same non-secret fields as `config.enc`):
 
 ```bash
 ticker-tracker --show-config
@@ -75,9 +94,7 @@ ticker-tracker --show-config --web
 ticker-tracker --show-config --web --show-config-host 127.0.0.1 --show-config-port 8768
 ```
 
-The web view needs `pip install 'ticker-tracker[web]'` (Flask).
-
-**What the `[web]` extra does *not* include:** there is **no** browser page for live **portfolio holdings / P/L** (that comes from the Google Sheet, the generated Excel file, and the email attachment). Web is only for **setup** (`ticker-tracker-setup --web`) and **read-only config** (`ticker-tracker --show-config --web`).
+**Other browser tools:** `ticker-tracker-setup --web` opens the **setup-only** form; `--show-config --web` is **read-only**. Use **`python app.py`** for the full dashboard (preview, uploads, and editable Settings).
 
 ---
 
@@ -123,7 +140,7 @@ Optional mapped fields:
 
 Notes:
 - For XLSX, the sheet/tab name defaults to `Holdings` (configurable).
-- Local-file runs are intentionally local-only: **Google Drive upload and Gmail sends are disabled** for that run.
+- For **CLI / Tk** runs with `holdings_source` **`local_file`**, **Google Drive** and **Gmail** are disabled. The **web dashboard** can still **upload** a file and optionally **send mail** after analysis (see [Web dashboard](#web-dashboard-browser-ui)).
 - Relative local paths are resolved from the current working directory.
 
 **Example mixed portfolio (listing currencies):**
@@ -248,12 +265,61 @@ The command is **`python -m ticker_tracker --run`** (same interpreter you used t
 
 | Path | Role |
 |------|------|
+| `app.py` | Start the **web dashboard** (`python app.py` → port 5225 by default). |
 | `ticker_tracker/main.py` | CLI / GUI entry (`ticker-tracker`). |
 | `ticker_tracker/engine.py` | Sheets → FX → prices → XLSX → optional Drive → Gmail. |
+| `ticker_tracker/web/dashboard_server.py` | Flask app for the dashboard (API + static files). |
+| `ticker_tracker/web/dashboard/` | Dashboard **HTML / CSS / JS** (`index.html`, `css/`, `js/`). |
 | `ticker_tracker/finance/`, `ticker_tracker/fx/` | Price and FX adapters + registries. |
 | `ticker_tracker/ui/popup.py` | Tk “Portfolio Tracker” window. |
 | `ticker_tracker/ui/startup_registration.py` | OS login registration. |
 | `docs/multi_currency.md` | Deep dive on currencies and FX. |
+
+---
+
+## Analysis Module
+
+When enabled, Ticker Tracker fetches fundamental data and computes technical indicators for each holding, then synthesises a BUY/HOLD/SELL signal using an LLM. Choose **Ollama** (fully local, e.g. Qwen or Gemma) or **Gemini Flash** (Google API; ticker + fundamentals + technicals only — **no holdings in the prompt** unless you opt in).
+
+### Requirements
+
+**Ollama** (default provider):
+
+- [Ollama](https://ollama.ai) with your model pulled, e.g. `ollama pull qwen2.5:7b` or `ollama pull gemma3:4b`
+- Host reachable at the configured **Ollama URL** (default `http://localhost:11434`)
+
+**Gemini Flash**:
+
+- API key from [Google AI Studio](https://aistudio.google.com/) (keychain or `GEMINI_API_KEY` / `GOOGLE_API_KEY`)
+- Model default: `gemini-2.0-flash` (free tier; analysis spaces requests ~6s apart)
+
+### What is analysed
+
+**Fundamentals** (via yfinance, with optional FMP Cloud fallback):
+
+P/E, P/B, EV/EBITDA, margins, growth rates, debt ratios, analyst consensus, earnings surprise, recent news headlines.
+
+**Technical indicators** (computed locally via pandas-ta-classic):
+
+EMA (20/50/200), RSI(14), MACD(12/26/9), Bollinger Bands (20,2), ATR(14), OBV, volume vs 20-day average.
+
+**LLM synthesis** (Ollama local, or Gemini cloud):
+
+Each ticker receives a BUY/HOLD/SELL signal, confidence level, three strengths, three risks, and a two-sentence summary. The portfolio summary uses prior per-ticker signals only (not raw holdings). Optional setting adds position size to prompts (intended for local Ollama).
+
+### Data quality notes
+
+- **US tickers** (NYSE/NASDAQ): full fundamental data is usually available.
+- **SGX/HKEx tickers**: fundamentals may be sparse via yfinance alone; add an **FMP Cloud** API key in setup for richer coverage.
+- **LSE tickers** (`.L`): supported; pence correction applies as usual.
+- Analysis does **not** change the Holdings or Summary sheets — it adds **Analysis** and **Portfolio Signals** sheets (and HTML sections) only.
+- To disable analysis for a faster run: set `analysis_enabled` to false in the setup wizard, or run:
+
+  ```bash
+  ticker-tracker --run --no-analysis
+  ```
+
+See **[docs/analysis.md](docs/analysis.md)** for how indicators, prompts, and signals work, plus troubleshooting.
 
 ---
 
@@ -263,6 +329,7 @@ The command is **`python -m ticker_tracker --run`** (same interpreter you used t
 make install    # venv + editable install with dev + web extras
 make setup      # ticker-tracker --setup (CLI wizard)
 make run        # ticker-tracker (Tk popup)
+python app.py   # web dashboard (see [Web dashboard](#web-dashboard-browser-ui))
 make test       # pytest + coverage
 make lint       # ruff check + format check
 make clean      # caches + coverage artifacts

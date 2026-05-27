@@ -70,3 +70,16 @@ def test_encrypted_config_round_trip(
 
     # Salt should exist in our fake keyring store
     assert isolated_keyring.get((KEYRING_SERVICE, KEYRING_CONFIG_KEY_USER)) is not None
+
+
+def test_load_undecryptable_file_warns_and_returns_empty(
+    tmp_path: Path, isolated_keyring: dict[tuple[str, str], str]
+) -> None:
+    path = tmp_path / "config.enc"
+    enc = EncryptedConfig(path)
+    enc.save(AppConfig(google_sheets_id="abc"))
+    path.write_bytes(b"x" * 80)
+    with pytest.warns(UserWarning, match="Could not decrypt config.enc"):
+        loaded = enc.load()
+    assert loaded == AppConfig()
+    assert enc.can_decrypt() is False

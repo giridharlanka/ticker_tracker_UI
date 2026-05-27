@@ -7,14 +7,19 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from ticker_tracker.config import (
+    LLM_PROVIDERS,
     AppConfig,
     EncryptedConfig,
     get_finance_api_key,
     get_fx_api_key,
+    get_gemini_api_key,
     set_finance_api_key,
+    set_fmp_api_key,
     set_fx_api_key,
+    set_gemini_api_key,
 )
 from ticker_tracker.currency import is_valid_iso4217, normalize_iso4217
 from ticker_tracker.finance.twelvedata_adapter import (
@@ -44,6 +49,12 @@ FX_SOURCES = (
 FREE_FX_SOURCES = frozenset({"frankfurter"})
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+SUGGESTED_ANALYSIS_MODELS = (
+    ("qwen2.5:7b", "recommended balance of quality and speed"),
+    ("gemma3:4b", "faster, lighter"),
+    ("llama3.2:3b", "fastest"),
+)
 
 RECOMMENDED_COLUMNS = (
     ("ticker", "Ticker symbol (local code if you use exchange)"),
@@ -167,6 +178,41 @@ def _validate_fx_source(fx_source: str) -> list[str]:
     return []
 
 
+def validate_ollama_url(url: str) -> list[str]:
+    """Return validation issues for an Ollama base URL (empty list if OK)."""
+    issues: list[str] = []
+    raw = (url or "").strip()
+    if not raw:
+        issues.append("Ollama URL is required when analysis is enabled.")
+        return issues
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        issues.append("Ollama URL must start with http:// or https://")
+    if not parsed.netloc:
+        issues.append("Ollama URL must include a host (e.g. http://localhost:11434).")
+    return issues
+
+
+def _validate_analysis_ollama(ollama_url: str, analysis_model: str) -> list[str]:
+    issues: list[str] = []
+    issues.extend(validate_ollama_url(ollama_url))
+    if not (analysis_model or "").strip():
+        issues.append("Ollama model name is required when analysis is enabled.")
+    return issues
+
+
+def _validate_analysis_gemini(gemini_model: str, *, gemini_api_key: str | None) -> list[str]:
+    issues: list[str] = []
+    if not (gemini_model or "").strip():
+        issues.append("Gemini model name is required when using Gemini for analysis.")
+    key = gemini_api_key or get_gemini_api_key()
+    if not key or len(key) < 8:
+        issues.append(
+            "Gemini API key is required (Settings keychain or GEMINI_API_KEY / GOOGLE_API_KEY env)."
+        )
+    return issues
+
+
 def _validate_fx_api_key(fx_source: str, fx_api_key: str | None) -> list[str]:
     if fx_source in FREE_FX_SOURCES:
         return []
@@ -190,13 +236,14 @@ def verify_setup(
     *,
     finance_api_keys: dict[str, str],
     fx_api_key: str | None,
+    require_local_holdings_path: bool = True,
 ) -> list[str]:
     """Return human-readable issues; empty means OK."""
     issues: list[str] = []
     issues.extend(_validate_holdings_source(config.holdings_source))
     if config.holdings_source == "google_sheets":
         issues.extend(_validate_google_sheet_id(config.google_sheets_id))
-    else:
+    elif require_local_holdings_path:
         issues.extend(_validate_local_holdings_path(config.local_holdings_path))
     issues.extend(_validate_column_map(config.column_map))
     issues.extend(_validate_emails(config.email_ids))
@@ -209,6 +256,14 @@ def verify_setup(
     if config.holdings_source == "local_file" and config.upload_to_drive:
         issues.append("Google Drive upload is unavailable when holdings_source is local_file.")
     issues.extend(_validate_local_report_dir(config.local_report_dir))
+    if config.analysis_enabled:
+        provider = (config.llm_provider or "ollama").strip().lower()
+        if provider not in LLM_PROVIDERS:
+            issues.append(f"Unknown LLM provider {provider!r}. Choose: ollama, gemini.")
+        elif provider == "gemini":
+            issues.extend(_validate_analysis_gemini(config.gemini_model, gemini_api_key=None))
+        else:
+            issues.extend(_validate_analysis_ollama(config.ollama_url, config.analysis_model))
     issues.extend(_remote_verify_finance_keys(config))
     return issues
 
@@ -281,9 +336,21 @@ def apply_setup(
     output_formats: list[str],
     local_report_dir: str,
     encrypted_config: EncryptedConfig,
+    require_local_holdings_path: bool = True,
+    analysis_enabled: bool = True,
+    ollama_url: str = "http://localhost:11434",
+    analysis_model: str = "qwen2.5:7b",
+    llm_provider: str = "ollama",
+    gemini_model: str = "gemini-2.0-flash",
+    llm_include_holding_context: bool = False,
+    fmp_api_key: str | None = None,
+    gemini_api_key: str | None = None,
 ) -> tuple[AppConfig | None, list[str]]:
     """
     Validate, then write ``config.enc`` and keychain entries.
+
+    When *require_local_holdings_path* is False, ``holdings_source=local_file`` may be saved
+    with an empty path (e.g. dashboard Settings where the path is chosen on the run panel).
 
     Returns ``(config, [])`` on success, or ``(None, issues)`` on validation failure.
     """
@@ -303,6 +370,12 @@ def apply_setup(
         upload_to_drive=upload_to_drive,
         output_formats=list(dict.fromkeys(output_formats)),
         local_report_dir=local_report_dir.strip(),
+        analysis_enabled=analysis_enabled,
+        ollama_url=(ollama_url or "http://localhost:11434").strip().rstrip("/"),
+        analysis_model=(analysis_model or "qwen2.5:7b").strip(),
+        llm_provider=(llm_provider or "ollama").strip().lower(),
+        gemini_model=(gemini_model or "gemini-2.0-flash").strip(),
+        llm_include_holding_context=bool(llm_include_holding_context),
     )
     effective_finance_keys = dict(finance_api_keys)
     for src in finance_sources:
@@ -320,6 +393,7 @@ def apply_setup(
         cfg,
         finance_api_keys=effective_finance_keys,
         fx_api_key=effective_fx_key,
+        require_local_holdings_path=require_local_holdings_path,
     )
     if issues:
         return None, issues
@@ -328,6 +402,10 @@ def apply_setup(
 
     encrypted_config.save(cfg)
     persist_api_keys(finance_sources, finance_api_keys, cfg.fx_source, fx_api_key)
+    if fmp_api_key is not None:
+        set_fmp_api_key(fmp_api_key or None)
+    if gemini_api_key is not None:
+        set_gemini_api_key(gemini_api_key or None)
     return cfg, []
 
 

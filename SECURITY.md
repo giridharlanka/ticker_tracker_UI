@@ -10,6 +10,8 @@
 | Finance API keys (per source) | OS keychain: service `ticker-tracker`, user `finance-api-<source>` | e.g. `finance-api-alpha_vantage`. |
 | Twelve Data API key | OS keychain: service `ticker-tracker-twelvedata`, user `api-key` | Written when Twelve Data is enabled in setup. |
 | Open Exchange Rates app ID | OS keychain: service `ticker-tracker-oxr`, user `api-key` | Written when OXR is selected as FX source. |
+| FMP API key | OS keychain: service `ticker-tracker-fmp`, user `api-key` | Optional fundamentals enrichment. |
+| Gemini API key | OS keychain: service `ticker-tracker-gemini`, user `api-key` | Or `GEMINI_API_KEY` / `GOOGLE_API_KEY` in the environment. Prompts exclude holdings by default. |
 
 ## What is and is not on disk
 

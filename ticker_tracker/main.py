@@ -7,6 +7,9 @@ import sys
 
 
 def main(argv: list[str] | None = None) -> None:
+    from ticker_tracker.config import load_env_files
+
+    load_env_files()
     parser = argparse.ArgumentParser(description="Ticker Tracker — portfolio summary and setup.")
     parser.add_argument(
         "--setup",
@@ -17,6 +20,11 @@ def main(argv: list[str] | None = None) -> None:
         "--run",
         action="store_true",
         help="Run the portfolio engine once (headless, no GUI).",
+    )
+    parser.add_argument(
+        "--no-analysis",
+        action="store_true",
+        help="With --run: skip fundamentals, technicals, and LLM sheets (faster run).",
     )
     parser.add_argument(
         "--show-config",
@@ -77,7 +85,10 @@ def main(argv: list[str] | None = None) -> None:
             end = "\n" if pct >= 100 else ""
             print(f"\r[{pct:3d}%] [{bar}] {msg}", end=end, file=sys.stderr, flush=True)
 
-        run_once(progress_callback=_headless_progress)
+        run_once(
+            progress_callback=_headless_progress,
+            analysis_enabled=False if args.no_analysis else None,
+        )
         return
 
     from ticker_tracker.ui.popup import show_popup

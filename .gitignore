@@ -25,6 +25,7 @@ coverage.xml
 htmlcov/
 
 # Other files
+docs/
 exploration_prompt*
 Portfolio_Tracker_Implementation_Plan*
 .DS_Store

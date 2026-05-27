@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ticker Tracker</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Ticker Tracker <span class="sub">local dashboard · not for production hosting</span></h1>
+    </div>
+    <button type="button" class="btn btn-ghost" id="btn_settings" title="Settings">Settings</button>
+  </header>
+
+  <div class="layout">
+    <aside class="panel">
+      <h2>Run</h2>
+      <div class="field">
+        <span class="label">Holdings source</span>
+        <div class="row">
+          <input type="radio" name="run_source" id="run_source_google" value="google" checked>
+          <label for="run_source_google">Google Sheets (uses Sheet ID from Settings)</label>
+        </div>
+        <div class="row">
+          <input type="radio" name="run_source" id="run_source_upload" value="upload">
+          <label for="run_source_upload">Upload file (CSV / XLSX)</label>
+        </div>
+      </div>
+      <p class="hint" id="sheet_hint">Reads the spreadsheet configured in Settings → Google Sheets ID.</p>
+
+      <div class="field" id="run_output_field">
+        <label class="label" for="run_output_dir">Output folder</label>
+        <div class="path-row">
+          <input type="text" id="run_output_dir" autocomplete="off" placeholder="Blank = system temp (same as saved config default)">
+          <button type="button" class="btn" id="btn_pick_output_folder">Browse…</button>
+        </div>
+        <p class="hint">Where HTML/XLSX files are written for this run. Browse uses a native folder picker on your machine.</p>
+      </div>
+
+      <div class="field run-upload-block" id="run_upload_section">
+        <h3 class="run-sub">Local holdings file</h3>
+        <label class="label" for="run_holdings_path">Path on this computer</label>
+        <div class="path-row">
+          <input type="text" id="run_holdings_path" autocomplete="off" placeholder="/path/to/holdings.xlsx">
+          <button type="button" class="btn" id="btn_pick_holdings_file">Browse…</button>
+        </div>
+        <label class="label" for="run_local_sheet_name">XLSX sheet tab (ignored for CSV)</label>
+        <input type="text" id="run_local_sheet_name" value="Holdings" autocomplete="off">
+
+        <span class="label">Or upload</span>
+        <div class="drop" id="drop_zone" role="button" tabindex="0">
+          <strong>Drop file here</strong> or click to choose<br>
+          <span id="file_label" class="hint">No file uploaded</span>
+        </div>
+        <input class="sr-only" type="file" id="file_input" accept=".csv,.xlsx,.xls">
+        <p class="hint">If you set a path above, it takes precedence over upload. Browser uploads cannot fill the path field.</p>
+      </div>
+
+      <div class="field">
+        <div class="row">
+          <input type="checkbox" id="send_email" checked>
+          <label for="send_email">Send email after analysis (uses Gmail API &amp; recipients in Settings)</label>
+        </div>
+      </div>
+
+      <div class="actions-row">
+        <button type="button" class="btn btn-primary" id="btn_analyse">Analyse</button>
+        <button
+          type="button"
+          class="btn btn-email email-mode-idle"
+          id="btn_email"
+          disabled
+          title="Available after a successful Analyse run"
+        >Email report</button>
+      </div>
+      <div class="run-progress" id="run_progress" hidden>
+        <div class="run-progress-label" id="run_progress_label">Analysing portfolio…</div>
+        <div class="run-progress-track" role="progressbar" aria-label="Analysis in progress">
+          <div class="run-progress-indeterminate"></div>
+        </div>
+      </div>
+      <p class="status" id="run_status" aria-live="polite"></p>
+    </aside>
+
+    <section class="preview">
+      <div class="preview-header">
+        <span id="preview_title">Report preview</span>
+        <span class="hint" id="preview_hint">HTML output matches the generated report file</span>
+      </div>
+      <div class="preview-frame-wrap">
+        <div class="preview-progress" id="preview_progress" hidden>
+          <div class="preview-progress-top">
+            <div
+              class="preview-progress-track"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+              id="preview_progress_track"
+            >
+              <div class="preview-progress-fill" id="preview_progress_fill" style="width: 0%"></div>
+            </div>
+            <span class="preview-progress-pct" id="preview_progress_pct">0%</span>
+          </div>
+          <p class="preview-progress-msg" id="preview_progress_msg"></p>
+          <div class="preview-progress-body">
+            <div class="preview-progress-log" id="preview_progress_log" aria-live="polite"></div>
+            <div class="preview-live-signals-wrap" id="preview_live_wrap" hidden>
+              <h3 class="preview-live-title">AI signals (live)</h3>
+              <table class="preview-live-table" id="preview_live_table">
+                <thead>
+                  <tr><th>Ticker</th><th>Signal</th><th>Confidence</th></tr>
+                </thead>
+                <tbody id="preview_live_tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <iframe class="preview-frame" id="report_frame" title="Report preview" sandbox="allow-scripts allow-same-origin allow-downloads"></iframe>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="analyse_mode_backdrop" role="dialog" aria-modal="true" aria-labelledby="analyse_mode_title">
+    <div class="modal analyse-mode-modal">
+      <header>
+        <span id="analyse_mode_title">How should we analyse?</span>
+        <button type="button" class="btn btn-ghost" id="analyse_mode_close" aria-label="Cancel">Cancel</button>
+      </header>
+      <div class="body">
+        <p class="hint">Choose once per run. Settings still control defaults for scheduled/CLI runs.</p>
+        <div class="analyse-mode-options">
+          <button type="button" class="analyse-mode-card" id="analyse_mode_full" data-analysis="1">
+            <strong>Full analysis</strong>
+            <span>Fundamentals, technicals, and AI signals. Best detail; can take several minutes.</span>
+          </button>
+          <button type="button" class="analyse-mode-card" id="analyse_mode_fast" data-analysis="0">
+            <strong>Portfolio only (fast)</strong>
+            <span>Prices, FX, summary, and holdings. No fundamentals/technicals/LLM.</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="modal_backdrop" role="dialog" aria-modal="true" aria-labelledby="modal_title">
+    <div class="modal">
+      <header>
+        <span id="modal_title">Settings</span>
+        <button type="button" class="btn btn-ghost" id="modal_close" aria-label="Close">Close</button>
+      </header>
+      <div class="body">
+        <div id="modal_errors"></div>
+        <div class="form-ok" id="modal_ok" style="display:none;">Saved.</div>
+
+        <h3>Holdings source</h3>
+        <div class="row">
+          <input type="radio" name="holdings_source" id="src_google" value="google_sheets">
+          <label for="src_google">Google Sheets</label>
+        </div>
+        <div class="row">
+          <input type="radio" name="holdings_source" id="src_local" value="local_file">
+          <label for="src_local">Local file (CSV or XLSX)</label>
+        </div>
+
+        <h3>Google Sheets</h3>
+        <p class="help">Sheet ID from the browser URL (between /d/ and /edit).</p>
+        <label class="label" for="google_sheets_id">Sheet ID</label>
+        <input type="text" id="google_sheets_id" autocomplete="off">
+
+        <label class="label" for="holdings_sheet_name">Tab name</label>
+        <input type="text" id="holdings_sheet_name" required>
+
+        <h3>Column mapping</h3>
+        <p class="help">Column letters (A, B, …). Optional fields can be left blank.</p>
+        <label class="label" for="col_ticker">ticker</label>
+        <input type="text" id="col_ticker" maxlength="3" pattern="[A-Za-z]*">
+        <label class="label" for="col_exchange">exchange</label>
+        <input type="text" id="col_exchange" maxlength="3" pattern="[A-Za-z]*">
+        <label class="label" for="col_shares">shares</label>
+        <input type="text" id="col_shares" maxlength="3" pattern="[A-Za-z]*">
+        <label class="label" for="col_cost_basis">cost_basis</label>
+        <input type="text" id="col_cost_basis" maxlength="3" pattern="[A-Za-z]*">
+        <label class="label" for="col_purchase_currency">purchase_currency</label>
+        <input type="text" id="col_purchase_currency" maxlength="3" pattern="[A-Za-z]*">
+        <label class="label" for="col_currency_override">currency_override</label>
+        <input type="text" id="col_currency_override" maxlength="3" pattern="[A-Za-z]*">
+
+        <h3>Email addresses</h3>
+        <p class="help">One address per line — notified on each run when enabled.</p>
+        <textarea id="emails"></textarea>
+
+        <h3>Price sources</h3>
+        <div class="row">
+          <input type="checkbox" id="fin_yahoo" value="1"><label for="fin_yahoo">Yahoo Finance (no API key)</label>
+        </div>
+        <div class="row">
+          <input type="checkbox" id="fin_alpha_vantage" value="1"><label for="fin_alpha_vantage">Alpha Vantage</label>
+        </div>
+        <p class="key-status" id="key_status_alpha_vantage">alpha_vantage API key: —</p>
+        <label class="label" for="key_action_alpha_vantage">Key action</label>
+        <select id="key_action_alpha_vantage">
+          <option value="keep">Keep existing key</option>
+          <option value="replace">Replace with new key</option>
+          <option value="clear">Clear existing key</option>
+        </select>
+        <label class="label" for="key_alpha_vantage">New key (if replacing)</label>
+        <input type="password" id="key_alpha_vantage" autocomplete="new-password">
+
+        <div class="row">
+          <input type="checkbox" id="fin_twelve_data" value="1"><label for="fin_twelve_data">Twelve Data</label>
+        </div>
+        <p class="key-status" id="key_status_twelve_data">twelve_data API key: —</p>
+        <label class="label" for="key_action_twelve_data">Key action</label>
+        <select id="key_action_twelve_data">
+          <option value="keep">Keep existing key</option>
+          <option value="replace">Replace with new key</option>
+          <option value="clear">Clear existing key</option>
+        </select>
+        <label class="label" for="key_twelve_data">New key (if replacing)</label>
+        <input type="password" id="key_twelve_data" autocomplete="new-password">
+
+        <div class="row">
+          <input type="checkbox" id="fin_finnhub" value="1"><label for="fin_finnhub">Finnhub</label>
+        </div>
+        <p class="key-status" id="key_status_finnhub">finnhub API key: —</p>
+        <label class="label" for="key_action_finnhub">Key action</label>
+        <select id="key_action_finnhub">
+          <option value="keep">Keep existing key</option>
+          <option value="replace">Replace with new key</option>
+          <option value="clear">Clear existing key</option>
+        </select>
+        <label class="label" for="key_finnhub">New key (if replacing)</label>
+        <input type="password" id="key_finnhub" autocomplete="new-password">
+
+        <div class="row">
+          <input type="checkbox" id="fin_polygon" value="1"><label for="fin_polygon">Polygon.io</label>
+        </div>
+        <p class="key-status" id="key_status_polygon">polygon API key: —</p>
+        <label class="label" for="key_action_polygon">Key action</label>
+        <select id="key_action_polygon">
+          <option value="keep">Keep existing key</option>
+          <option value="replace">Replace with new key</option>
+          <option value="clear">Clear existing key</option>
+        </select>
+        <label class="label" for="key_polygon">New key (if replacing)</label>
+        <input type="password" id="key_polygon" autocomplete="new-password">
+
+        <h3>Base currency</h3>
+        <label class="label" for="base_currency">ISO code (e.g. SGD)</label>
+        <input type="text" id="base_currency" maxlength="8" required>
+
+        <h3>FX source</h3>
+        <select id="fx_source">
+          <option value="frankfurter">Frankfurter (free)</option>
+          <option value="open_exchange_rates">Open Exchange Rates (API key)</option>
+          <option value="fixer">Fixer (API key)</option>
+          <option value="currencylayer">Currencylayer (API key)</option>
+        </select>
+        <p class="key-status" id="key_status_fx">FX API key: —</p>
+        <label class="label" for="fx_key_action">FX key action</label>
+        <select id="fx_key_action">
+          <option value="keep">Keep existing key</option>
+          <option value="replace">Replace with new key</option>
+          <option value="clear">Clear existing key</option>
+        </select>
+        <label class="label" for="fx_api_key">New FX API key (if replacing)</label>
+        <input type="password" id="fx_api_key" autocomplete="new-password">
+
+        <h3>Analysis</h3>
+        <p class="help">Fundamentals, technical indicators, and optional LLM signals (local Ollama or Gemini Flash). Adds Analysis sheets to XLSX when enabled.</p>
+        <div class="row">
+          <input type="checkbox" id="analysis_enabled" value="1" checked>
+          <label for="analysis_enabled">Enable fundamental and technical analysis (recommended)</label>
+        </div>
+        <div id="analysis_options">
+          <label class="label" for="llm_provider">LLM provider (signals &amp; commentary)</label>
+          <select id="llm_provider">
+            <option value="ollama">Ollama (local — Qwen, Gemma, etc.)</option>
+            <option value="gemini">Gemini Flash (Google API)</option>
+          </select>
+
+          <div id="llm_ollama_fields">
+            <label class="label" for="ollama_url">Ollama URL</label>
+            <input type="url" id="ollama_url" autocomplete="off" placeholder="http://localhost:11434">
+
+            <label class="label" for="analysis_model">Ollama model</label>
+            <input type="text" id="analysis_model" list="analysis_model_suggestions" autocomplete="off" placeholder="qwen2.5:7b">
+            <datalist id="analysis_model_suggestions">
+              <option value="qwen2.5:7b">Recommended</option>
+              <option value="gemma3:4b">Faster</option>
+              <option value="llama3.2:3b">Fastest</option>
+            </datalist>
+            <p class="help">Pull the model first: <code>ollama pull qwen2.5:7b</code></p>
+          </div>
+
+          <div id="llm_gemini_fields" hidden>
+            <label class="label" for="gemini_model">Gemini model</label>
+            <input type="text" id="gemini_model" list="gemini_model_suggestions" autocomplete="off" placeholder="gemini-2.0-flash">
+            <datalist id="gemini_model_suggestions">
+              <option value="gemini-2.0-flash">Recommended (free tier)</option>
+              <option value="gemini-2.5-flash">Newer Flash</option>
+            </datalist>
+            <p class="key-status" id="key_status_gemini">Gemini API key: —</p>
+            <label class="label" for="gemini_key_action">Gemini API key action</label>
+            <select id="gemini_key_action">
+              <option value="keep">Keep existing key</option>
+              <option value="replace">Replace with new key</option>
+              <option value="clear">Clear existing key</option>
+            </select>
+            <label class="label" for="key_gemini">New Gemini API key (if replacing)</label>
+            <input type="password" id="key_gemini" autocomplete="new-password">
+            <p class="help">Use a key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a> (not a generic Cloud/Maps key). Store in keychain, or <code>GEMINI_API_KEY</code> in <code>.env</code>. Prompts exclude holdings (ticker + market data only).</p>
+          </div>
+
+          <div class="row">
+            <input type="checkbox" id="llm_include_holding_context" value="1">
+            <label for="llm_include_holding_context">Include position size in LLM prompt (off by default; for local Ollama only)</label>
+          </div>
+
+          <p class="key-status" id="key_status_fmp">FMP API key: —</p>
+          <label class="label" for="fmp_key_action">FMP key action (optional, SGX/HKEx fundamentals)</label>
+          <select id="fmp_key_action">
+            <option value="keep">Keep existing key</option>
+            <option value="replace">Replace with new key</option>
+            <option value="clear">Clear existing key</option>
+          </select>
+          <label class="label" for="key_fmp">New FMP API key (if replacing)</label>
+          <input type="password" id="key_fmp" autocomplete="new-password">
+        </div>
+
+        <h3>Market overrides</h3>
+        <p class="help">One per line, e.g. .KL=MYR</p>
+        <textarea id="market_overrides"></textarea>
+
+        <h3>Google Drive</h3>
+        <div class="row">
+          <input type="checkbox" id="upload_to_drive" value="1">
+          <label for="upload_to_drive">Upload generated Excel to Google Drive</label>
+        </div>
+
+        <h3>Report formats (saved)</h3>
+        <p class="help">The dashboard always builds HTML for preview. XLSX is generated when enabled here.</p>
+        <div class="row">
+          <input type="checkbox" id="output_xlsx" value="1"><label for="output_xlsx">XLSX</label>
+        </div>
+        <div class="row">
+          <input type="checkbox" id="output_html" value="1"><label for="output_html">HTML file on disk</label>
+        </div>
+
+        <p class="help">Holdings file path, XLSX tab, and output folder are set in the Run panel per analysis.</p>
+
+        <h3>Startup</h3>
+        <div class="row">
+          <input type="checkbox" id="run_on_startup" value="1">
+          <label for="run_on_startup">Launch with the operating system (when supported)</label>
+        </div>
+      </div>
+      <footer>
+        <button type="button" class="btn btn-ghost" id="modal_cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="modal_save">Save configuration</button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
